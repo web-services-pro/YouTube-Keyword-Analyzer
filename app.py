@@ -23,17 +23,28 @@ st.markdown("Analyze YouTube competition and commercial intent for your keywords
 with st.sidebar:
     st.header("⚙️ API Configuration")
     
-    youtube_api_key = st.text_input(
-        "YouTube API Key",
-        type="password",
-        help="Get your key from Google Cloud Console"
-    )
+    # Try to load from secrets first, fallback to user input
+    youtube_api_key = st.secrets.get("YOUTUBE_API_KEY", None) if hasattr(st, 'secrets') else None
+    ke_api_key = st.secrets.get("KE_API_KEY", None) if hasattr(st, 'secrets') else None
     
-    ke_api_key = st.text_input(
-        "Keywords Everywhere API Key",
-        type="password",
-        help="Get your key from Keywords Everywhere"
-    )
+    # If not in secrets, ask user to input
+    if not youtube_api_key:
+        youtube_api_key = st.text_input(
+            "YouTube API Key",
+            type="password",
+            help="Get your key from Google Cloud Console"
+        )
+    else:
+        st.success("✅ YouTube API Key loaded from secrets")
+    
+    if not ke_api_key:
+        ke_api_key = st.text_input(
+            "Keywords Everywhere API Key",
+            type="password",
+            help="Get your key from Keywords Everywhere"
+        )
+    else:
+        st.success("✅ Keywords Everywhere API Key loaded from secrets")
     
     st.markdown("---")
     st.markdown("### 📊 How It Works")
