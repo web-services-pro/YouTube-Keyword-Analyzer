@@ -214,6 +214,14 @@ def analyze_keyword(youtube, keyword, ke_api_key):
         video_stats, channel_stats = get_video_and_channel_stats(youtube, youtube_videos)
         yt_competition = calculate_youtube_competition_score(keyword, youtube_videos, video_stats, channel_stats)
 
+    # Extract CPC value and convert to float
+    cpc_value = 0.00
+    if ke_data and ke_data.get('cpc', {}).get('value'):
+        try:
+            cpc_value = float(ke_data.get('cpc', {}).get('value', 0.00))
+        except (ValueError, TypeError):
+            cpc_value = 0.00
+
     # Prepare result
     result = {
         "Keyword": keyword,
@@ -221,7 +229,7 @@ def analyze_keyword(youtube, keyword, ke_api_key):
         "Direct Competition %": f"{yt_competition.get('direct_competition', 0) * 100:.0f}%" if yt_competition.get('direct_competition') != 'N/A' else 'N/A',
         "Avg Top 10 Views": yt_competition.get('authority_views', 'N/A'),
         "Search Volume": ke_data.get('vol', 'N/A') if ke_data else 'N/A',
-        "CPC": ke_data.get('cpc', {}).get('value', 0.00) if ke_data else 0.00
+        "CPC": cpc_value  # Store as float, not string
     }
 
     return result
@@ -311,8 +319,12 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
         
         # Display table
         st.dataframe(
-            df,
-            use_container_width=True,
+            df.style.format({
+                'CPC': '${:.2f}',
+                'Search Volume': '{:,.0f}',
+                'Avg Top 10 Views': '{:,.0f}'
+            }, na_rep='N/A'),
+            width='stretch',
             hide_index=True
         )
         
@@ -345,8 +357,13 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
         
         # Download button
         st.markdown("---")
+        
+        # Format dataframe for CSV download
+        df_download = df.copy()
+        df_download['CPC'] = df_download['CPC'].apply(lambda x: f"${x:.2f}" if isinstance(x, (int, float)) else x)
+        
         csv_buffer = StringIO()
-        df.to_csv(csv_buffer, index=False)
+        df_download.to_csv(csv_buffer, index=False)
         
         st.download_button(
             label="⬇️ Download Results as CSV",
