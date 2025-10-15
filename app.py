@@ -8,6 +8,8 @@ import streamlit as st
 from googleapiclient.discovery import build
 from io import StringIO
 from datetime import datetime, timezone
+import google.generativeai as genai
+import re
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -27,11 +29,13 @@ with st.sidebar:
     # Try to load from secrets first, fallback to user input
     youtube_api_key = None
     ke_api_key = None
+    gemini_api_key = None
     
     try:
         # Try to get keys from secrets
         youtube_api_key = st.secrets.get("YOUTUBE_API_KEY", None)
         ke_api_key = st.secrets.get("KE_API_KEY", None)
+        gemini_api_key = st.secrets.get("GEMINI_API_KEY", None)
     except (FileNotFoundError, KeyError):
         # Secrets file doesn't exist or keys not found - that's okay
         pass
@@ -56,12 +60,24 @@ with st.sidebar:
         st.success("✅ Keywords Everywhere API Key loaded from secrets")
     
     st.markdown("---")
+    st.markdown("### 🤖 AI Content Generation")
+    
+    if not gemini_api_key:
+        gemini_api_key = st.text_input(
+            "Google AI API Key (for Gemini)",
+            type="password",
+            help="Get your key from Google AI Studio"
+        )
+    else:
+        st.success("✅ Gemini API Key loaded from secrets")
+    
+    st.markdown("---")
     st.markdown("### 📊 Competition Scoring")
     st.markdown("""
     **Composite Score Breakdown:**
     - 🎯 Direct Competition: **50%**
-    - 📝 Broad Competition: **20%**
-    - 👑 Authority Score: **30%**
+    - 🔍 Broad Competition: **20%**
+    - 💡 Authority Score: **30%**
       - View Count: 40%
       - Engagement Rate: 25%
       - Channel Authority: 20%
@@ -82,6 +98,48 @@ with st.sidebar:
 def get_youtube_client(api_key):
     """Creates and caches YouTube API client."""
     return build('youtube', 'v3', developerKey=api_key)
+
+def get_youtube_autocomplete_suggestions(seed_keyword):
+    """
+    Fetches YouTube's autocomplete suggestions for a seed keyword.
+    
+    This uses an unofficial, undocumented API endpoint.
+    """
+    suggestions = []
+    try:
+        # The URL for the unofficial YouTube autocomplete API
+        url = "http://suggestqueries.google.com/complete/search"
+        params = {
+            "client": "youtube",
+            "ds": "yt",
+            "q": seed_keyword
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status()  # Raise an exception for bad status codes
+
+        # The response is not valid JSON, it's like: window.google.ac.h([...])
+        # We need to find the opening bracket and closing parenthesis to extract the JSON part.
+        text = response.text
+        start = text.find('[')
+        end = text.rfind(']')
+        
+        if start != -1 and end != -1:
+            # The first item in the list is the original keyword, so we skip it.
+            # The second item is the list of suggestions.
+            json_data = text[start:end+1]
+            data = requests.utils.json.loads(json_data)
+            if len(data) > 1:
+                suggestions = [item[0] for item in data[1]]  # Suggestions are in the second element
+        
+        return suggestions
+
+    except requests.exceptions.RequestException as e:
+        st.warning(f"Could not fetch autocomplete for '{seed_keyword}': {e}")
+        return []
+    except Exception as e:
+        st.warning(f"Error parsing autocomplete for '{seed_keyword}': {e}")
+        return []
 
 def get_youtube_search_results(youtube, keyword):
     """Fetches top 50 search results from YouTube for a keyword."""
@@ -125,18 +183,20 @@ def get_video_and_channel_stats(youtube, video_items):
         return [], []
 
 def get_keywords_everywhere_data(keyword, api_key):
-    """Fetches Google Search Volume and CPC from Keywords Everywhere."""
+    """
+    Fetches comprehensive data including CPC, Volume, Related Keywords, and PAA
+    from Keywords Everywhere.
+    """
     try:
         headers = {
             'Accept': 'application/json',
             'Authorization': f'Bearer {api_key}'
         }
-        # Keywords Everywhere API uses POST with form data
         data = {
-            'kw[]': [keyword],  # Array of keywords
+            'kw[]': [keyword],
             'country': 'us',
             'currency': 'usd',
-            'dataSource': 'cli'  # Use 'cli' for combined GKP + Clickstream data
+            'dataSource': 'cli'  # 'cli' provides a rich set of data
         }
         response = requests.post(
             'https://api.keywordseverywhere.com/v1/get_keyword_data',
@@ -147,6 +207,7 @@ def get_keywords_everywhere_data(keyword, api_key):
         if response.status_code == 200:
             result = response.json()
             if result.get('data') and len(result['data']) > 0:
+                # Return the entire data object for the keyword
                 return result['data'][0]
         elif response.status_code == 401:
             st.error("❌ Keywords Everywhere API: Invalid API Key")
@@ -191,13 +252,6 @@ def calculate_video_freshness_score(video_stats_item):
         age_days = (current_date - published_date).days
         
         # Scoring: Newer videos get higher scores
-        # 0-30 days: 1.0
-        # 31-90 days: 0.9
-        # 91-180 days: 0.8
-        # 181-365 days: 0.6
-        # 1-2 years: 0.4
-        # 2+ years: 0.2
-        
         if age_days <= 30:
             return 1.0
         elif age_days <= 90:
@@ -219,13 +273,6 @@ def get_channel_authority_score(channel_stats, channel_id):
         for channel in channel_stats:
             if channel['id'] == channel_id:
                 subs = int(channel.get('statistics', {}).get('subscriberCount', 0))
-                
-                # Normalize subscriber count with logarithm
-                # 1K subs: ~0.38
-                # 10K subs: ~0.50
-                # 100K subs: ~0.63
-                # 1M subs: ~0.75
-                # 10M+ subs: ~0.88+
                 
                 if subs == 0:
                     return 0.0
@@ -266,7 +313,6 @@ def calculate_youtube_competition_score(keyword, video_items, video_stats, chann
     # Sub-metric 3.2: Average Engagement Rate (25% of authority score)
     engagement_rates = [calculate_engagement_rate(v) for v in video_stats]
     avg_engagement = sum(engagement_rates) / len(engagement_rates) if engagement_rates else 0
-    # Normalize engagement (typical good engagement is 3-5%)
     engagement_score = min(avg_engagement / 0.05, 1.0)  # 5% = max score
     
     # Sub-metric 3.3: Channel Authority (20% of authority score)
@@ -360,18 +406,179 @@ def analyze_keyword(youtube, keyword, ke_api_key):
 
     return result
 
+def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
+    """
+    Uses Google's Gemini Pro to generate a complete YouTube asset package.
+    """
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+
+        # Create a string from the cluster for the prompt
+        cluster_string = ", ".join(keyword_cluster[:10])  # Limit to 10 for prompt clarity
+
+        # The prompt is crucial for getting structured output
+        prompt = f"""
+You are a world-class YouTube SEO strategist and expert copywriter. Your goal is to create a complete, highly-optimized asset package for a YouTube video.
+
+**Main Target Keyword:** "{main_keyword}"
+
+**Supporting Keyword Cluster (use these concepts naturally):** "{cluster_string}"
+
+**Your Task:** Generate 3 titles, 2 SEO-optimized description variations, and a list of video tags based on the provided keywords. Follow the output format below EXACTLY using the specified markdown headers.
+
+---
+
+### TITLES
+(Generate 3 distinct, clickable, SEO-optimized title options. Each title must be under 70 characters and in Title Case.)
+1. 
+2. 
+3. 
+
+---
+
+### DESCRIPTION 1
+(Generate the first SEO-optimized description variation - under 1000 characters - with the following structure:
+1. The first line should be compelling and hook-focused.
+2. The second line is a Call to Action, like "➡️ Get my free guide here: [LINK]".
+3. Write 3-4 paragraphs that naturally incorporate the main keyword and several supporting keywords from the cluster. Provide value and entice viewers to watch.
+4. Add a list of 3-5 relevant hashtags based on the keyword cluster.
+5. End with a repeat of the Call to Action.)
+
+---
+
+### DESCRIPTION 2
+(Generate the second SEO-optimized description variation - under 1000 characters - with a different angle than Description 1. Use the same structure but vary the writing style and emphasis.)
+
+---
+
+### TAGS
+(Provide a single, comma-separated list of all relevant keywords from the supporting keyword cluster. Include variations and related terms. Keep spaces in multi-word keywords. This should be ready to copy and paste directly into YouTube's tag field.)
+
+"""
+        
+        response = model.generate_content(prompt)
+        return response.text
+    
+    except Exception as e:
+        st.error(f"Gemini API Error: {e}")
+        return "Error: Could not generate assets."
+
+def parse_gemini_output(text):
+    """Parses the structured text from Gemini into a dictionary."""
+    try:
+        # Using regex to find content under each header
+        titles_match = re.search(r"### TITLES\s*\n(.*?)\n\n---", text, re.DOTALL)
+        desc1_match = re.search(r"### DESCRIPTION 1\s*\n(.*?)\n\n---", text, re.DOTALL)
+        desc2_match = re.search(r"### DESCRIPTION 2\s*\n(.*?)\n\n---", text, re.DOTALL)
+        tags_match = re.search(r"### TAGS\s*\n(.*?)$", text, re.DOTALL)
+        
+        return {
+            "titles": titles_match.group(1).strip() if titles_match else "Could not parse titles.",
+            "description1": desc1_match.group(1).strip() if desc1_match else "Could not parse description 1.",
+            "description2": desc2_match.group(1).strip() if desc2_match else "Could not parse description 2.",
+            "tags": tags_match.group(1).strip() if tags_match else "Could not parse tags."
+        }
+    except Exception as e:
+        # Fallback if parsing fails
+        return {
+            "titles": "Could not parse.",
+            "description1": text,
+            "description2": "Could not parse.",
+            "tags": "Could not parse."
+        }
+
 # --- MAIN APP ---
 
 # Input area
-st.markdown("### 📝 Enter Keywords to Analyze")
+st.markdown("### 🔍 Enter Seed Keywords")
 keywords_input = st.text_area(
-    "Enter keywords (one per line)",
-    height=150,
-    placeholder="advanced sourdough baking techniques\nhow to build a gaming pc 2025\nbeginner landscape photography tutorial"
+    "Enter 1-5 seed keywords (one per line)",
+    height=100,
+    placeholder="advanced sourdough baking\ngaming pc build\nlandscape photography"
 )
 
-# Parse keywords
-keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
+# New Feature: Keyword Expansion Options
+st.markdown("#### ✨ Keyword Expansion Options")
+col1, col2, col3 = st.columns(3)
+with col1:
+    expand_autocomplete = st.checkbox("Auto-Suggest", help="Expand with YouTube's autocomplete suggestions.")
+with col2:
+    expand_related = st.checkbox("Related Keywords", help="Expand with semantically related keywords from Google.")
+with col3:
+    expand_paa = st.checkbox("Related Questions", help="Expand with 'People Also Ask' questions from Google.")
+
+# Parse initial seed keywords
+seed_keywords = [k.strip() for k in keywords_input.split('\n') if k.strip()]
+
+# Validate seed keyword count
+if len(seed_keywords) > 5:
+    st.error("⚠️ Please enter a maximum of 5 seed keywords!")
+    st.stop()
+
+keywords_list = list(seed_keywords)  # Start with the original list
+
+# Logic to expand the list based on checkbox selections
+if (expand_autocomplete or expand_related or expand_paa) and seed_keywords:
+    
+    # Use a set to store all keywords and avoid duplicates
+    all_keywords = set(seed_keywords)
+    
+    suggest_status = st.empty()
+    
+    for i, seed in enumerate(seed_keywords):
+        suggest_status.text(f"Expanding '{seed}' ({i+1}/{len(seed_keywords)})...")
+        
+        # 1. Autocomplete Expansion
+        if expand_autocomplete:
+            suggestions = get_youtube_autocomplete_suggestions(seed)
+            if suggestions:
+                all_keywords.update(suggestions)
+        
+        # 2. Related & PAA Expansion (uses one API call)
+        if expand_related or expand_paa:
+            # Check for API key before making the call
+            if not ke_api_key:
+                st.error("Keywords Everywhere API key is required for expansion!")
+                st.stop()
+            
+            ke_data = get_keywords_everywhere_data(seed, ke_api_key)
+            if ke_data:
+                # Add Related Keywords (LSI-style)
+                if expand_related:
+                    related = ke_data.get('related_keywords', {}).get('keywords', [])
+                    if related:
+                        all_keywords.update(related)
+                
+                # Add People Also Ask Questions
+                if expand_paa:
+                    paa = ke_data.get('people_also_ask', {}).get('keywords', [])
+                    if paa:
+                        all_keywords.update(paa)
+        
+        time.sleep(0.5)  # Small delay to be polite to the APIs
+    
+    suggest_status.success(f"✅ Expanded from {len(seed_keywords)} seeds to {len(all_keywords)} unique keywords.")
+    
+    keywords_list = sorted(list(all_keywords))
+
+# Check if keyword list exceeds 99
+if len(keywords_list) > 99:
+    st.warning(f"⚠️ You have {len(keywords_list)} keywords, but the YouTube API limit is 99. Please remove {len(keywords_list) - 99} keywords below.")
+    
+    # Allow user to deselect keywords
+    st.markdown("#### ✂️ Trim Your Keyword List")
+    selected_keywords = st.multiselect(
+        f"Select up to 99 keywords to analyze (currently {len(keywords_list)} keywords)",
+        options=keywords_list,
+        default=keywords_list[:99]  # Pre-select first 99
+    )
+    
+    if len(selected_keywords) > 99:
+        st.error(f"❌ Please select exactly 99 or fewer keywords. You currently have {len(selected_keywords)} selected.")
+        st.stop()
+    
+    keywords_list = selected_keywords
 
 # Show keyword count
 if keywords_list:
@@ -459,7 +666,7 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
                 'Channel Authority': '{:.2f}',
                 'Video Freshness': '{:.2f}'
             }, na_rep='N/A'),
-            width='stretch',
+            use_container_width=True,
             hide_index=True
         )
         
@@ -482,7 +689,7 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
                         st.write(f"├─ Direct Competition: {result['Direct Competition %']}")
                         st.write(f"└─ Broad Competition: {result.get('_details', {}).get('broad_competition', 'N/A')}")
                         
-                        st.markdown("**👑 Authority Metrics**")
+                        st.markdown("**💡 Authority Metrics**")
                         details = result.get('_details', {})
                         st.write(f"├─ Avg Views: {result['Avg Top 10 Views']:,}" if result['Avg Top 10 Views'] != 'N/A' else "├─ Avg Views: N/A")
                         st.write(f"├─ Engagement: {result['Engagement Rate %']}%" if result['Engagement Rate %'] != 'N/A' else "├─ Engagement: N/A")
@@ -490,7 +697,7 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
                         st.write(f"└─ Video Freshness: {result['Video Freshness']}" if result['Video Freshness'] != 'N/A' else "└─ Video Freshness: N/A")
                         
                         if details:
-                            st.markdown("**🔢 Score Contributions**")
+                            st.markdown("**📢 Score Contributions**")
                             st.write(f"├─ Views: +{details.get('views_contribution', 0):.2f} pts")
                             st.write(f"├─ Engagement: +{details.get('engagement_contribution', 0):.2f} pts")
                             st.write(f"├─ Authority: +{details.get('authority_contribution', 0):.2f} pts")
@@ -530,11 +737,78 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
             file_name="keyword_analysis_results.csv",
             mime="text/csv"
         )
+        
+        # --- AI ASSET GENERATION SECTION ---
+        st.markdown("---")
+        st.markdown("## ✏️ AI Asset Generation")
+        st.markdown("Select your winning keywords to generate optimized YouTube titles, descriptions, and tags.")
+        
+        # Filter for successful results to populate the selector
+        successful_keywords = [res['Keyword'] for res in results if res['Competition Score'] != 'N/A']
+        
+        selected_winners = st.multiselect(
+            "Select winning keywords to generate AI assets for:",
+            options=successful_keywords,
+            help="Choose keywords with good potential for AI-powered content generation."
+        )
+
+        if st.button("✨ Generate AI Assets for Selected Keywords", disabled=not selected_winners, type="primary"):
+            if not gemini_api_key:
+                st.error("⚠️ Please enter your Google AI (Gemini) API key in the sidebar!")
+                st.stop()
+
+            # Create tabs for each selected keyword's assets
+            tabs = st.tabs([f"🚀 {winner}" for winner in selected_winners])
+
+            for i, winner in enumerate(selected_winners):
+                with tabs[i]:
+                    with st.spinner(f"🤖 Gemini is crafting assets for '{winner}'..."):
+                        
+                        # Re-generate the cluster for the selected keyword
+                        keyword_cluster = get_youtube_autocomplete_suggestions(winner)
+                        if winner not in keyword_cluster:
+                            keyword_cluster.insert(0, winner)
+                        
+                        # Call the Gemini function
+                        generated_assets_text = generate_youtube_assets_with_gemini(gemini_api_key, winner, keyword_cluster)
+                        
+                        if "Error:" not in generated_assets_text:
+                            # Parse the structured output
+                            parsed_assets = parse_gemini_output(generated_assets_text)
+                            
+                            st.subheader("🎬 Generated Titles")
+                            st.markdown(parsed_assets["titles"])
+                            
+                            st.subheader("📝 Generated Description - Option 1")
+                            st.text_area(
+                                "Description 1 (ready to copy)",
+                                value=parsed_assets["description1"],
+                                height=250,
+                                key=f"desc1_{i}"
+                            )
+                            
+                            st.subheader("📝 Generated Description - Option 2")
+                            st.text_area(
+                                "Description 2 (ready to copy)",
+                                value=parsed_assets["description2"],
+                                height=250,
+                                key=f"desc2_{i}"
+                            )
+                            
+                            st.subheader("🏷️ Generated Tags")
+                            st.text_area(
+                                "Tags (ready to copy)",
+                                value=parsed_assets["tags"],
+                                height=100,
+                                key=f"tags_{i}"
+                            )
+                        else:
+                            st.error(generated_assets_text)
 
 # Footer
 st.markdown("---")
 st.markdown(
     "<div style='text-align: center; color: #666;'>Built with Streamlit | "
-    "Powered by YouTube Data API & Keywords Everywhere</div>",
+    "Powered by YouTube Data API, Keywords Everywhere & Google Gemini</div>",
     unsafe_allow_html=True
 )
