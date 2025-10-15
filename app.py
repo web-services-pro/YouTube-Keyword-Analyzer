@@ -413,7 +413,7 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
     """
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         # Create a string from the cluster for the prompt
         cluster_string = ", ".join(keyword_cluster[:10])  # Limit to 10 for prompt clarity
