@@ -430,7 +430,7 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
 ---
 
 ### TITLES
-(Generate 3 distinct, clickable, SEO-optimized title options. Each title must be under 70 characters and in Title Case.)
+(Generate 3 distinct, clickable, SEO-optimized title options which are compelling and hook-focused. Each title must be under 90 characters and in Title Case.)
 1. 
 2. 
 3. 
@@ -438,22 +438,22 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
 ---
 
 ### DESCRIPTION 1
-(Generate the first SEO-optimized description variation - under 1000 characters - with the following structure:
-1. The first line should be compelling and hook-focused.
+(Generate the first SEO-optimized description variation - under 2000 characters - with the following structure:
+1. The first line should be a repeat of one of the 3 Titles.
 2. The second line is a Call to Action, like "➡️ Get my free guide here: [LINK]".
-3. Write 3-4 paragraphs that naturally incorporate the main keyword and several supporting keywords from the cluster. Provide value and entice viewers to watch.
+3. Write 2-3 paragraphs that naturally incorporate the main keyword and several supporting keywords from the cluster. Provide value and entice viewers to watch.
 4. Add a list of 3-5 relevant hashtags based on the keyword cluster.
 5. End with a repeat of the Call to Action.)
 
 ---
 
 ### DESCRIPTION 2
-(Generate the second SEO-optimized description variation - under 1000 characters - with a different angle than Description 1. Use the same structure but vary the writing style and emphasis.)
+(Generate the second SEO-optimized description variation - under 2000 characters - with a different angle than Description 1. Use the same structure but vary the writing style and emphasis.)
 
 ---
 
 ### TAGS
-(Provide a single, comma-separated list of all relevant keywords from the supporting keyword cluster. Include variations and related terms. Keep spaces in multi-word keywords. This should be ready to copy and paste directly into YouTube's tag field. Do NOT include hashtag symbols.)
+(Provide a single, comma-separated list of 15-20 highly relevant keywords. Include the main keyword, keywords from the cluster, and add relevant variations like plurals, synonyms, and re-ordered phrases. Keep spaces in multi-word keywords. This should be ready to copy and paste into the YouTube tag field. Do NOT include hashtag symbols.)
 """
         
         response = model.generate_content(prompt)
