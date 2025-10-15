@@ -115,7 +115,7 @@ def get_youtube_autocomplete_suggestions(seed_keyword):
             "q": seed_keyword
         }
         
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()  # Raise an exception for bad status codes
 
         # The response is not valid JSON, it's like: window.google.ac.h([...])
@@ -201,7 +201,8 @@ def get_keywords_everywhere_data(keyword, api_key):
         response = requests.post(
             'https://api.keywordseverywhere.com/v1/get_keyword_data',
             headers=headers,
-            data=data
+            data=data,
+            timeout=15
         )
         
         if response.status_code == 200:
@@ -418,8 +419,7 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
         cluster_string = ", ".join(keyword_cluster[:10])  # Limit to 10 for prompt clarity
 
         # The prompt is crucial for getting structured output
-        prompt = f"""
-You are a world-class YouTube SEO strategist and expert copywriter. Your goal is to create a complete, highly-optimized asset package for a YouTube video.
+        prompt = f"""You are a world-class YouTube SEO strategist and expert copywriter. Your goal is to create a complete, highly-optimized asset package for a YouTube video.
 
 **Main Target Keyword:** "{main_keyword}"
 
@@ -453,8 +453,7 @@ You are a world-class YouTube SEO strategist and expert copywriter. Your goal is
 ---
 
 ### TAGS
-(Provide a single, comma-separated list of all relevant keywords from the supporting keyword cluster. Include variations and related terms. Keep spaces in multi-word keywords. This should be ready to copy and paste directly into YouTube's tag field.)
-
+(Provide a single, comma-separated list of all relevant keywords from the supporting keyword cluster. Include variations and related terms. Keep spaces in multi-word keywords. This should be ready to copy and paste directly into YouTube's tag field. Do NOT include hashtag symbols.)
 """
         
         response = model.generate_content(prompt)
@@ -462,15 +461,15 @@ You are a world-class YouTube SEO strategist and expert copywriter. Your goal is
     
     except Exception as e:
         st.error(f"Gemini API Error: {e}")
-        return "Error: Could not generate assets."
+        return f"Error: Could not generate assets. {str(e)}"
 
 def parse_gemini_output(text):
     """Parses the structured text from Gemini into a dictionary."""
     try:
-        # Using regex to find content under each header
-        titles_match = re.search(r"### TITLES\s*\n(.*?)\n\n---", text, re.DOTALL)
-        desc1_match = re.search(r"### DESCRIPTION 1\s*\n(.*?)\n\n---", text, re.DOTALL)
-        desc2_match = re.search(r"### DESCRIPTION 2\s*\n(.*?)\n\n---", text, re.DOTALL)
+        # Using regex to find content under each header - more flexible patterns
+        titles_match = re.search(r"### TITLES\s*\n(.*?)(?=\n---|\n###|$)", text, re.DOTALL)
+        desc1_match = re.search(r"### DESCRIPTION 1\s*\n(.*?)(?=\n---|\n###|$)", text, re.DOTALL)
+        desc2_match = re.search(r"### DESCRIPTION 2\s*\n(.*?)(?=\n---|\n###|$)", text, re.DOTALL)
         tags_match = re.search(r"### TAGS\s*\n(.*?)$", text, re.DOTALL)
         
         return {
@@ -481,11 +480,12 @@ def parse_gemini_output(text):
         }
     except Exception as e:
         # Fallback if parsing fails
+        st.warning(f"Parsing warning: {e}")
         return {
-            "titles": "Could not parse.",
-            "description1": text,
-            "description2": "Could not parse.",
-            "tags": "Could not parse."
+            "titles": "Could not parse titles.",
+            "description1": text[:500] if len(text) > 500 else text,
+            "description2": "Could not parse description 2.",
+            "tags": "Could not parse tags."
         }
 
 # --- MAIN APP ---
@@ -502,7 +502,7 @@ keywords_input = st.text_area(
 st.markdown("#### ✨ Keyword Expansion Options")
 col1, col2, col3 = st.columns(3)
 with col1:
-    expand_autocomplete = st.checkbox("Auto-Suggest", help="Expand with YouTube's autocomplete suggestions.")
+    expand_autocomplete = st.checkbox("Auto-Suggest", help="Expand with YouTube's autocomplete suggestions (~10 per keyword).")
 with col2:
     expand_related = st.checkbox("Related Keywords", help="Expand with semantically related keywords from Google.")
 with col3:
@@ -521,8 +521,9 @@ keywords_list = list(seed_keywords)  # Start with the original list
 # Logic to expand the list based on checkbox selections
 if (expand_autocomplete or expand_related or expand_paa) and seed_keywords:
     
-    # Use a set to store all keywords and avoid duplicates
-    all_keywords = set(seed_keywords)
+    # Use a set to store all keywords and avoid duplicates (but preserve order)
+    all_keywords = list(seed_keywords)  # Start with seeds in order
+    seen = set(seed_keywords)  # Track what we've seen
     
     suggest_status = st.empty()
     
@@ -533,43 +534,66 @@ if (expand_autocomplete or expand_related or expand_paa) and seed_keywords:
         if expand_autocomplete:
             suggestions = get_youtube_autocomplete_suggestions(seed)
             if suggestions:
-                all_keywords.update(suggestions)
+                for sugg in suggestions:
+                    if sugg not in seen:
+                        all_keywords.append(sugg)
+                        seen.add(sugg)
         
         # 2. Related & PAA Expansion (uses one API call)
         if expand_related or expand_paa:
             # Check for API key before making the call
             if not ke_api_key:
-                st.error("Keywords Everywhere API key is required for expansion!")
+                st.error("Keywords Everywhere API key is required for Related Keywords and People Also Ask expansion!")
                 st.stop()
             
             ke_data = get_keywords_everywhere_data(seed, ke_api_key)
             if ke_data:
                 # Add Related Keywords (LSI-style)
                 if expand_related:
-                    related = ke_data.get('related_keywords', {}).get('keywords', [])
+                    related_data = ke_data.get('related_keywords', {})
+                    if isinstance(related_data, dict):
+                        related = related_data.get('keywords', [])
+                    elif isinstance(related_data, list):
+                        related = related_data
+                    else:
+                        related = []
+                    
                     if related:
-                        all_keywords.update(related)
+                        for rel in related:
+                            if rel not in seen:
+                                all_keywords.append(rel)
+                                seen.add(rel)
                 
                 # Add People Also Ask Questions
                 if expand_paa:
-                    paa = ke_data.get('people_also_ask', {}).get('keywords', [])
+                    paa_data = ke_data.get('people_also_ask', {})
+                    if isinstance(paa_data, dict):
+                        paa = paa_data.get('keywords', [])
+                    elif isinstance(paa_data, list):
+                        paa = paa_data
+                    else:
+                        paa = []
+                    
                     if paa:
-                        all_keywords.update(paa)
+                        for question in paa:
+                            if question not in seen:
+                                all_keywords.append(question)
+                                seen.add(question)
         
         time.sleep(0.5)  # Small delay to be polite to the APIs
     
     suggest_status.success(f"✅ Expanded from {len(seed_keywords)} seeds to {len(all_keywords)} unique keywords.")
     
-    keywords_list = sorted(list(all_keywords))
+    keywords_list = all_keywords
 
 # Check if keyword list exceeds 99
 if len(keywords_list) > 99:
-    st.warning(f"⚠️ You have {len(keywords_list)} keywords, but the YouTube API limit is 99. Please remove {len(keywords_list) - 99} keywords below.")
+    st.warning(f"⚠️ You have {len(keywords_list)} keywords, but the YouTube API limit is 99. Please remove {len(keywords_list) - 99} keyword(s) below.")
     
     # Allow user to deselect keywords
     st.markdown("#### ✂️ Trim Your Keyword List")
     selected_keywords = st.multiselect(
-        f"Select up to 99 keywords to analyze (currently {len(keywords_list)} keywords)",
+        f"Select up to 99 keywords to analyze (currently showing {len(keywords_list)} keywords)",
         options=keywords_list,
         default=keywords_list[:99]  # Pre-select first 99
     )
@@ -589,7 +613,7 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
     
     # Validate API keys
     if not youtube_api_key or not ke_api_key:
-        st.error("⚠️ Please enter both API keys in the sidebar!")
+        st.error("⚠️ Please enter both YouTube and Keywords Everywhere API keys in the sidebar!")
         st.stop()
     
     # Initialize YouTube client
@@ -626,6 +650,9 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
     
     status_text.text("✅ Analysis complete!")
     progress_bar.progress(1.0)
+    
+    # Store results in session state for AI generation
+    st.session_state['analysis_results'] = results
     
     # Display results
     if results:
@@ -737,15 +764,20 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
             file_name="keyword_analysis_results.csv",
             mime="text/csv"
         )
-        
-        # --- AI ASSET GENERATION SECTION ---
-        st.markdown("---")
-        st.markdown("## ✏️ AI Asset Generation")
-        st.markdown("Select your winning keywords to generate optimized YouTube titles, descriptions, and tags.")
-        
-        # Filter for successful results to populate the selector
-        successful_keywords = [res['Keyword'] for res in results if res['Competition Score'] != 'N/A']
-        
+
+# --- AI ASSET GENERATION SECTION ---
+# Only show if we have results in session state
+if 'analysis_results' in st.session_state and st.session_state['analysis_results']:
+    results = st.session_state['analysis_results']
+    
+    st.markdown("---")
+    st.markdown("## ✏️ AI Asset Generation")
+    st.markdown("Select your winning keywords to generate optimized YouTube titles, descriptions, and tags.")
+    
+    # Filter for successful results to populate the selector
+    successful_keywords = [res['Keyword'] for res in results if res['Competition Score'] != 'N/A']
+    
+    if successful_keywords:
         selected_winners = st.multiselect(
             "Select winning keywords to generate AI assets for:",
             options=successful_keywords,
@@ -797,13 +829,15 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
                             
                             st.subheader("🏷️ Generated Tags")
                             st.text_area(
-                                "Tags (ready to copy)",
+                                "Tags (ready to copy - comma separated, no hashtags)",
                                 value=parsed_assets["tags"],
                                 height=100,
                                 key=f"tags_{i}"
                             )
                         else:
                             st.error(generated_assets_text)
+    else:
+        st.info("No successful keyword analyses found. Please run an analysis first.")
 
 # Footer
 st.markdown("---")
