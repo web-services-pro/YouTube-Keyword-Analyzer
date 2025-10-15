@@ -126,19 +126,30 @@ def get_keywords_everywhere_data(keyword, api_key):
             'Accept': 'application/json',
             'Authorization': f'Bearer {api_key}'
         }
-        params = {
+        # Keywords Everywhere API uses POST with form data
+        data = {
+            'kw[]': [keyword],  # Array of keywords
             'country': 'us',
             'currency': 'usd',
-            'dataSource': 'google',
-            'query': keyword
+            'dataSource': 'cli'  # Use 'cli' for combined GKP + Clickstream data
         }
-        response = requests.get(
+        response = requests.post(
             'https://api.keywordseverywhere.com/v1/get_keyword_data',
             headers=headers,
-            params=params
+            data=data
         )
-        if response.status_code == 200 and response.json().get('data'):
-            return response.json()['data'][0]
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('data') and len(result['data']) > 0:
+                return result['data'][0]
+        elif response.status_code == 401:
+            st.error("❌ Keywords Everywhere API: Invalid API Key")
+        elif response.status_code == 402:
+            st.error("❌ Keywords Everywhere API: Insufficient credits or invalid subscription")
+        else:
+            st.warning(f"Keywords Everywhere API returned status code: {response.status_code}")
+        
         return None
     except Exception as e:
         st.error(f"Keywords Everywhere API Error: {e}")
