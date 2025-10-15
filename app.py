@@ -24,8 +24,16 @@ with st.sidebar:
     st.header("⚙️ API Configuration")
     
     # Try to load from secrets first, fallback to user input
-    youtube_api_key = st.secrets.get("YOUTUBE_API_KEY", None) if hasattr(st, 'secrets') else None
-    ke_api_key = st.secrets.get("KE_API_KEY", None) if hasattr(st, 'secrets') else None
+    youtube_api_key = None
+    ke_api_key = None
+    
+    try:
+        # Try to get keys from secrets
+        youtube_api_key = st.secrets.get("YOUTUBE_API_KEY", None)
+        ke_api_key = st.secrets.get("KE_API_KEY", None)
+    except (FileNotFoundError, KeyError):
+        # Secrets file doesn't exist or keys not found - that's okay
+        pass
     
     # If not in secrets, ask user to input
     if not youtube_api_key:
