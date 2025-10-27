@@ -10,6 +10,7 @@ from io import StringIO
 from datetime import datetime, timezone
 import google.generativeai as genai
 import re
+import json
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -99,15 +100,14 @@ def get_youtube_client(api_key):
     """Creates and caches YouTube API client."""
     return build('youtube', 'v3', developerKey=api_key)
 
+@st.cache_data(ttl=3600)
 def get_youtube_autocomplete_suggestions(seed_keyword):
     """
     Fetches YouTube's autocomplete suggestions for a seed keyword.
-    
-    This uses an unofficial, undocumented API endpoint.
+    Cached for 1 hour to reduce API calls.
     """
     suggestions = []
     try:
-        # The URL for the unofficial YouTube autocomplete API
         url = "http://suggestqueries.google.com/complete/search"
         params = {
             "client": "youtube",
@@ -116,29 +116,22 @@ def get_youtube_autocomplete_suggestions(seed_keyword):
         }
         
         response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
 
-        # The response is not valid JSON, it's like: window.google.ac.h([...])
-        # We need to find the opening bracket and closing parenthesis to extract the JSON part.
         text = response.text
         start = text.find('[')
         end = text.rfind(']')
         
         if start != -1 and end != -1:
-            # The first item in the list is the original keyword, so we skip it.
-            # The second item is the list of suggestions.
             json_data = text[start:end+1]
-            data = requests.utils.json.loads(json_data)
+            data = json.loads(json_data)
             if len(data) > 1:
-                suggestions = [item[0] for item in data[1]]  # Suggestions are in the second element
+                suggestions = [item[0] for item in data[1]]
         
         return suggestions
 
-    except requests.exceptions.RequestException as e:
-        st.warning(f"Could not fetch autocomplete for '{seed_keyword}': {e}")
-        return []
     except Exception as e:
-        st.warning(f"Error parsing autocomplete for '{seed_keyword}': {e}")
+        st.warning(f"Could not fetch autocomplete for '{seed_keyword}': {e}")
         return []
 
 def get_youtube_search_results(youtube, keyword):
@@ -182,10 +175,11 @@ def get_video_and_channel_stats(youtube, video_items):
         st.error(f"Stats API Error: {e}")
         return [], []
 
+@st.cache_data(ttl=3600)
 def get_keywords_everywhere_data(keyword, api_key):
     """
     Fetches comprehensive data including CPC, Volume, Related Keywords, and PAA
-    from Keywords Everywhere.
+    from Keywords Everywhere. Cached for 1 hour.
     """
     try:
         headers = {
@@ -196,7 +190,7 @@ def get_keywords_everywhere_data(keyword, api_key):
             'kw[]': [keyword],
             'country': 'us',
             'currency': 'usd',
-            'dataSource': 'cli'  # 'cli' provides a rich set of data
+            'dataSource': 'cli'
         }
         response = requests.post(
             'https://api.keywordseverywhere.com/v1/get_keyword_data',
@@ -208,7 +202,6 @@ def get_keywords_everywhere_data(keyword, api_key):
         if response.status_code == 200:
             result = response.json()
             if result.get('data') and len(result['data']) > 0:
-                # Return the entire data object for the keyword
                 return result['data'][0]
         elif response.status_code == 401:
             st.error("❌ Keywords Everywhere API: Invalid API Key")
@@ -221,6 +214,13 @@ def get_keywords_everywhere_data(keyword, api_key):
     except Exception as e:
         st.error(f"Keywords Everywhere API Error: {e}")
         return None
+
+def validate_ke_data(ke_data):
+    """Ensures KE data has expected structure."""
+    if not ke_data:
+        return False
+    required_fields = ['vol', 'cpc']
+    return all(field in ke_data for field in required_fields)
 
 def calculate_engagement_rate(video_stats_item):
     """Calculates engagement rate (likes + comments) / views."""
@@ -243,16 +243,13 @@ def calculate_video_freshness_score(video_stats_item):
     try:
         published_at = video_stats_item.get('snippet', {}).get('publishedAt')
         if not published_at:
-            return 0.5  # Default middle score
+            return 0.5
         
-        # Parse the published date
         published_date = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
         current_date = datetime.now(timezone.utc)
         
-        # Calculate age in days
         age_days = (current_date - published_date).days
         
-        # Scoring: Newer videos get higher scores
         if age_days <= 30:
             return 1.0
         elif age_days <= 90:
@@ -304,7 +301,7 @@ def calculate_youtube_competition_score(keyword, video_items, video_stats, chann
             description_matches += 1
     broad_score = (description_matches / len(video_items)) if video_items else 0
 
-    # === METRIC 3: Authority Score (Weight: 30%) - NOW WITH 4 SUB-METRICS ===
+    # === METRIC 3: Authority Score (Weight: 30%) ===
     
     # Sub-metric 3.1: Average Views (40% of authority score)
     avg_views = sum(int(v['statistics'].get('viewCount', 0)) for v in video_stats) / len(video_stats) if video_stats else 0
@@ -314,7 +311,7 @@ def calculate_youtube_competition_score(keyword, video_items, video_stats, chann
     # Sub-metric 3.2: Average Engagement Rate (25% of authority score)
     engagement_rates = [calculate_engagement_rate(v) for v in video_stats]
     avg_engagement = sum(engagement_rates) / len(engagement_rates) if engagement_rates else 0
-    engagement_score = min(avg_engagement / 0.05, 1.0)  # 5% = max score
+    engagement_score = min(avg_engagement / 0.05, 1.0)
     
     # Sub-metric 3.3: Channel Authority (20% of authority score)
     channel_authorities = []
@@ -331,10 +328,10 @@ def calculate_youtube_competition_score(keyword, video_items, video_stats, chann
     
     # Combine authority sub-metrics with their weights
     authority_score = (
-        (views_score * 0.40) +           # 40% weight
-        (engagement_score * 0.25) +       # 25% weight
-        (avg_channel_authority * 0.20) +  # 20% weight
-        (avg_freshness * 0.15)            # 15% weight
+        (views_score * 0.40) +
+        (engagement_score * 0.25) +
+        (avg_channel_authority * 0.20) +
+        (avg_freshness * 0.15)
     )
     
     # === FINAL COMPOSITE SCORE ===
@@ -344,11 +341,10 @@ def calculate_youtube_competition_score(keyword, video_items, video_stats, chann
         "direct_competition": round(direct_score, 2),
         "broad_competition": round(broad_score, 2),
         "authority_views": int(avg_views),
-        "engagement_rate": round(avg_engagement * 100, 2),  # Convert to percentage
+        "engagement_rate": round(avg_engagement * 100, 2),
         "channel_authority": round(avg_channel_authority, 2),
         "video_freshness": round(avg_freshness, 2),
         "composite_score": round(final_score, 2),
-        # Breakdown for display
         "views_contribution": round(views_score * 0.40 * 30, 2),
         "engagement_contribution": round(engagement_score * 0.25 * 30, 2),
         "authority_contribution": round(avg_channel_authority * 0.20 * 30, 2),
@@ -373,7 +369,6 @@ def get_recommendation(score, cpc):
 
 def analyze_keyword(youtube, keyword, ke_api_key):
     """Analyzes a single keyword and returns results."""
-    # Fetch data
     youtube_videos = get_youtube_search_results(youtube, keyword)
     ke_data = get_keywords_everywhere_data(keyword, ke_api_key)
 
@@ -390,7 +385,6 @@ def analyze_keyword(youtube, keyword, ke_api_key):
         except (ValueError, TypeError):
             cpc_value = 0.00
 
-    # Prepare result
     result = {
         "Keyword": keyword,
         "Competition Score": yt_competition.get('composite_score', 'N/A'),
@@ -400,25 +394,20 @@ def analyze_keyword(youtube, keyword, ke_api_key):
         "Channel Authority": yt_competition.get('channel_authority', 'N/A'),
         "Video Freshness": yt_competition.get('video_freshness', 'N/A'),
         "Search Volume": ke_data.get('vol', 'N/A') if ke_data else 'N/A',
-        "CPC": cpc_value,  # Store as float, not string
-        # Store detailed breakdown for expander
+        "CPC": cpc_value,
         "_details": yt_competition
     }
 
     return result
 
 def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
-    """
-    Uses Google's Gemini Pro to generate a complete YouTube asset package.
-    """
+    """Uses Google's Gemini Pro to generate a complete YouTube asset package."""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
-        # Create a string from the cluster for the prompt
-        cluster_string = ", ".join(keyword_cluster[:10])  # Limit to 10 for prompt clarity
+        cluster_string = ", ".join(keyword_cluster[:10])
 
-        # The prompt is crucial for getting structured output
         prompt = f"""You are a world-class YouTube SEO strategist and expert copywriter. Your goal is to create a complete, highly-optimized asset package for a YouTube video.
 
 **Main Target Keyword:** "{main_keyword}"
@@ -466,7 +455,6 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
 def parse_gemini_output(text):
     """Parses the structured text from Gemini into a dictionary."""
     try:
-        # Using regex to find content under each header - more flexible patterns
         titles_match = re.search(r"### TITLES\s*\n(.*?)(?=\n---|\n###|$)", text, re.DOTALL)
         desc1_match = re.search(r"### DESCRIPTION 1\s*\n(.*?)(?=\n---|\n###|$)", text, re.DOTALL)
         desc2_match = re.search(r"### DESCRIPTION 2\s*\n(.*?)(?=\n---|\n###|$)", text, re.DOTALL)
@@ -479,7 +467,6 @@ def parse_gemini_output(text):
             "tags": tags_match.group(1).strip() if tags_match else "Could not parse tags."
         }
     except Exception as e:
-        # Fallback if parsing fails
         st.warning(f"Parsing warning: {e}")
         return {
             "titles": "Could not parse titles.",
@@ -498,7 +485,7 @@ keywords_input = st.text_area(
     placeholder="advanced sourdough baking\ngaming pc build\nlandscape photography"
 )
 
-# New Feature: Keyword Expansion Options
+# Keyword Expansion Options
 st.markdown("#### ✨ Keyword Expansion Options")
 col1, col2, col3 = st.columns(3)
 with col1:
@@ -516,93 +503,114 @@ if len(seed_keywords) > 5:
     st.error("⚠️ Please enter a maximum of 5 seed keywords!")
     st.stop()
 
-keywords_list = list(seed_keywords)  # Start with the original list
+# Initialize the final keyword list
+keywords_list = []
 
-# Logic to expand the list based on checkbox selections
-if (expand_autocomplete or expand_related or expand_paa) and seed_keywords:
+# === EXPANSION LOGIC ===
+if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
     
-    # Use a set to store all keywords and avoid duplicates (but preserve order)
-    all_keywords = list(seed_keywords)  # Start with seeds in order
-    seen = set(seed_keywords)  # Track what we've seen
-    
-    suggest_status = st.empty()
-    
-    for i, seed in enumerate(seed_keywords):
-        suggest_status.text(f"Expanding '{seed}' ({i+1}/{len(seed_keywords)})...")
-        
-        # 1. Autocomplete Expansion
-        if expand_autocomplete:
-            suggestions = get_youtube_autocomplete_suggestions(seed)
-            if suggestions:
-                for sugg in suggestions:
-                    if sugg not in seen:
-                        all_keywords.append(sugg)
-                        seen.add(sugg)
-        
-        # 2. Related & PAA Expansion (uses one API call)
-        if expand_related or expand_paa:
-            # Check for API key before making the call
-            if not ke_api_key:
-                st.error("Keywords Everywhere API key is required for Related Keywords and People Also Ask expansion!")
-                st.stop()
-            
-            ke_data = get_keywords_everywhere_data(seed, ke_api_key)
-            if ke_data:
-                # Add Related Keywords (LSI-style)
-                if expand_related:
-                    related_data = ke_data.get('related_keywords', {})
-                    if isinstance(related_data, dict):
-                        related = related_data.get('keywords', [])
-                    elif isinstance(related_data, list):
-                        related = related_data
-                    else:
-                        related = []
-                    
-                    if related:
-                        for rel in related:
-                            if rel not in seen:
-                                all_keywords.append(rel)
-                                seen.add(rel)
-                
-                # Add People Also Ask Questions
-                if expand_paa:
-                    paa_data = ke_data.get('people_also_ask', {})
-                    if isinstance(paa_data, dict):
-                        paa = paa_data.get('keywords', [])
-                    elif isinstance(paa_data, list):
-                        paa = paa_data
-                    else:
-                        paa = []
-                    
-                    if paa:
-                        for question in paa:
-                            if question not in seen:
-                                all_keywords.append(question)
-                                seen.add(question)
-        
-        time.sleep(0.5)  # Small delay to be polite to the APIs
-    
-    suggest_status.success(f"✅ Expanded from {len(seed_keywords)} seeds to {len(all_keywords)} unique keywords.")
-    
-    keywords_list = all_keywords
-
-# Check if keyword list exceeds 99
-if len(keywords_list) > 99:
-    st.warning(f"⚠️ You have {len(keywords_list)} keywords, but the YouTube API limit is 99. Please remove {len(keywords_list) - 99} keyword(s) below.")
-    
-    # Allow user to deselect keywords
-    st.markdown("#### ✂️ Trim Your Keyword List")
-    selected_keywords = st.multiselect(
-        f"Select up to 99 keywords to analyze (currently showing {len(keywords_list)} keywords)",
-        options=keywords_list,
-        default=keywords_list[:99]  # Pre-select first 99
-    )
-    
-    if len(selected_keywords) > 99:
-        st.error(f"❌ Please select exactly 99 or fewer keywords. You currently have {len(selected_keywords)} selected.")
+    # Check for required API key upfront
+    if (expand_related or expand_paa) and not ke_api_key:
+        st.error("⚠️ Keywords Everywhere API key is required for Related Keywords and People Also Ask expansion!")
         st.stop()
     
-    keywords_list = selected_keywords
+    # Use a set to track unique keywords
+    all_keywords = list(seed_keywords)
+    seen = set(seed_keywords)
+    
+    # Show expansion status
+    with st.spinner("🔍 Expanding keywords..."):
+        expansion_status = st.empty()
+        failed_expansions = []
+        
+        for i, seed in enumerate(seed_keywords):
+            expansion_status.text(f"Expanding '{seed}' ({i+1}/{len(seed_keywords)})...")
+            
+            try:
+                # 1. Autocomplete Expansion
+                if expand_autocomplete:
+                    suggestions = get_youtube_autocomplete_suggestions(seed)
+                    if suggestions:
+                        for sugg in suggestions:
+                            if sugg and sugg not in seen:
+                                all_keywords.append(sugg)
+                                seen.add(sugg)
+                
+                # 2. Related & PAA Expansion
+                if expand_related or expand_paa:
+                    ke_data = get_keywords_everywhere_data(seed, ke_api_key)
+                    if ke_data:
+                        # Add Related Keywords
+                        if expand_related:
+                            related_data = ke_data.get('related_keywords', {})
+                            if isinstance(related_data, dict):
+                                related = related_data.get('keywords', [])
+                            elif isinstance(related_data, list):
+                                related = related_data
+                            else:
+                                related = []
+                            
+                            for rel in related:
+                                if rel and rel not in seen:
+                                    all_keywords.append(rel)
+                                    seen.add(rel)
+                        
+                        # Add People Also Ask
+                        if expand_paa:
+                            paa_data = ke_data.get('people_also_ask', {})
+                            if isinstance(paa_data, dict):
+                                paa = paa_data.get('keywords', [])
+                            elif isinstance(paa_data, list):
+                                paa = paa_data
+                            else:
+                                paa = []
+                            
+                            for question in paa:
+                                if question and question not in seen:
+                                    all_keywords.append(question)
+                                    seen.add(question)
+                
+                time.sleep(0.5)
+                
+            except Exception as e:
+                failed_expansions.append((seed, str(e)))
+                continue
+        
+        expansion_status.empty()
+        
+        # Show expansion results
+        if len(all_keywords) > len(seed_keywords):
+            st.success(f"✅ Expanded from {len(seed_keywords)} seed(s) to {len(all_keywords)} unique keywords!")
+        else:
+            st.warning(f"⚠️ No additional keywords found. Using {len(seed_keywords)} original seed(s).")
+        
+        # Show failed expansions if any
+        if failed_expansions:
+            with st.expander(f"⚠️ {len(failed_expansions)} expansion(s) had errors"):
+                for keyword, error in failed_expansions:
+                    st.warning(f"**{keyword}**: {error}")
+        
+        keywords_list = all_keywords
+
+else:
+    # No expansion - use seed keywords directly
+    keywords_list = seed_keywords
+
+# === KEYWORD TRIMMING ===
+if len(keywords_list) > 99:
+    st.warning(f"⚠️ You have {len(keywords_list)} keywords, but we're limiting to 99 for analysis.")
+    
+    st.markdown("#### ✂️ Select Keywords to Analyze")
+    keywords_list = st.multiselect(
+        f"Select up to 99 keywords to analyze:",
+        options=keywords_list,
+        default=keywords_list[:99],
+        help="Choose which keywords you want to analyze"
+    )
+    
+    if len(keywords_list) > 99:
+        st.error(f"❌ Please select exactly 99 or fewer keywords. You currently have {len(keywords_list)} selected.")
+        st.stop()
 
 # Show keyword count
 if keywords_list:
@@ -637,10 +645,8 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
             result = analyze_keyword(youtube, keyword, ke_api_key)
             results.append(result)
             
-            # Update progress
             progress_bar.progress((i + 1) / len(keywords_list))
             
-            # Rate limiting
             if i < len(keywords_list) - 1:
                 time.sleep(1)
                 
@@ -651,7 +657,7 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
     status_text.text("✅ Analysis complete!")
     progress_bar.progress(1.0)
     
-    # Store results in session state for AI generation
+    # Store results in session state
     st.session_state['analysis_results'] = results
     
     # Display results
@@ -662,45 +668,92 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
         # Create DataFrame
         df = pd.DataFrame(results)
         
+        # Filter section
+        st.markdown("### 🎯 Filter Results")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            max_competition = st.slider("Max Competition Score", 0, 100, 100)
+        with col2:
+            min_cpc = st.number_input("Min CPC ($)", 0.0, 20.0, 0.0, 0.1)
+        with col3:
+            min_volume = st.number_input("Min Search Volume", 0, 1000000, 0, 100)
+        
+        # Apply filters
+        filtered_df = df.copy()
+        if max_competition < 100:
+            filtered_df = filtered_df[
+                (filtered_df['Competition Score'] == 'N/A') | 
+                (filtered_df['Competition Score'] <= max_competition)
+            ]
+        if min_cpc > 0:
+            filtered_df = filtered_df[filtered_df['CPC'] >= min_cpc]
+        if min_volume > 0:
+            filtered_df = filtered_df[
+                (filtered_df['Search Volume'] == 'N/A') | 
+                (filtered_df['Search Volume'] >= min_volume)
+            ]
+        
+        # Sort section
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            sort_by = st.selectbox(
+                "Sort by:",
+                ["Competition Score", "CPC", "Search Volume", "Engagement Rate %", "Keyword"]
+            )
+        with col2:
+            ascending = st.checkbox("Ascending", value=False)
+        
+        # Sort the filtered dataframe
+        try:
+            sorted_df = filtered_df.sort_values(by=sort_by, ascending=ascending)
+        except:
+            sorted_df = filtered_df
+        
         # Display metrics
+        st.markdown("---")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            avg_score = df[df['Competition Score'] != 'N/A']['Competition Score'].mean()
-            st.metric("Avg Competition", f"{avg_score:.1f}" if not pd.isna(avg_score) else "N/A")
+            valid_scores = sorted_df[sorted_df['Competition Score'] != 'N/A']['Competition Score']
+            avg_score = valid_scores.mean() if len(valid_scores) > 0 else None
+            st.metric("Avg Competition", f"{avg_score:.1f}" if avg_score is not None else "N/A")
         
         with col2:
-            low_comp = len(df[df['Competition Score'] < 30])
+            low_comp = len(sorted_df[sorted_df['Competition Score'] < 30])
             st.metric("Low Competition", low_comp)
         
         with col3:
-            high_cpc = len(df[df['CPC'] > 0.50])
+            high_cpc = len(sorted_df[sorted_df['CPC'] > 0.50])
             st.metric("High Monetization", high_cpc)
         
         with col4:
-            avg_engagement = df[df['Engagement Rate %'] != 'N/A']['Engagement Rate %'].mean()
-            st.metric("Avg Engagement", f"{avg_engagement:.2f}%" if not pd.isna(avg_engagement) else "N/A")
+            valid_engagement = sorted_df[sorted_df['Engagement Rate %'] != 'N/A']['Engagement Rate %']
+            avg_engagement = valid_engagement.mean() if len(valid_engagement) > 0 else None
+            st.metric("Avg Engagement", f"{avg_engagement:.2f}%" if avg_engagement is not None else "N/A")
         
-        # Display summary table (without details column)
-        display_df = df.drop(columns=['_details'])
+        # Display table
+        display_df = sorted_df.drop(columns=['_details'])
         
         st.dataframe(
             display_df.style.format({
                 'CPC': '${:.2f}',
-                'Search Volume': '{:,.0f}',
-                'Avg Top 10 Views': '{:,.0f}',
-                'Engagement Rate %': '{:.2f}%',
-                'Channel Authority': '{:.2f}',
-                'Video Freshness': '{:.2f}'
+                'Search Volume': lambda x: f'{x:,.0f}' if x != 'N/A' else 'N/A',
+                'Avg Top 10 Views': lambda x: f'{x:,.0f}' if x != 'N/A' else 'N/A',
+                'Engagement Rate %': lambda x: f'{x:.2f}%' if x != 'N/A' else 'N/A',
+                'Channel Authority': lambda x: f'{x:.2f}' if x != 'N/A' else 'N/A',
+                'Video Freshness': lambda x: f'{x:.2f}' if x != 'N/A' else 'N/A'
             }, na_rep='N/A'),
             use_container_width=True,
             hide_index=True
         )
         
+        st.info(f"Showing {len(sorted_df)} of {len(df)} total keywords")
+        
         # Detailed cards with score breakdown
         st.markdown("### 🎯 Detailed Analysis")
         
-        for result in results:
+        for _, result in sorted_df.iterrows():
             score = result['Competition Score']
             cpc = result['CPC']
             
@@ -714,14 +767,19 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
                         st.markdown("**📊 Competition Breakdown**")
                         st.write(f"**Overall Score:** {score}/100")
                         st.write(f"├─ Direct Competition: {result['Direct Competition %']}")
-                        st.write(f"└─ Broad Competition: {result.get('_details', {}).get('broad_competition', 'N/A')}")
+                        details = result.get('_details', {})
+                        broad = details.get('broad_competition', 'N/A')
+                        st.write(f"└─ Broad Competition: {broad}")
                         
                         st.markdown("**💡 Authority Metrics**")
-                        details = result.get('_details', {})
-                        st.write(f"├─ Avg Views: {result['Avg Top 10 Views']:,}" if result['Avg Top 10 Views'] != 'N/A' else "├─ Avg Views: N/A")
-                        st.write(f"├─ Engagement: {result['Engagement Rate %']}%" if result['Engagement Rate %'] != 'N/A' else "├─ Engagement: N/A")
-                        st.write(f"├─ Channel Authority: {result['Channel Authority']}" if result['Channel Authority'] != 'N/A' else "├─ Channel Authority: N/A")
-                        st.write(f"└─ Video Freshness: {result['Video Freshness']}" if result['Video Freshness'] != 'N/A' else "└─ Video Freshness: N/A")
+                        views = result['Avg Top 10 Views']
+                        st.write(f"├─ Avg Views: {views:,}" if views != 'N/A' else "├─ Avg Views: N/A")
+                        engagement = result['Engagement Rate %']
+                        st.write(f"├─ Engagement: {engagement}%" if engagement != 'N/A' else "├─ Engagement: N/A")
+                        authority = result['Channel Authority']
+                        st.write(f"├─ Channel Authority: {authority}" if authority != 'N/A' else "├─ Channel Authority: N/A")
+                        freshness = result['Video Freshness']
+                        st.write(f"└─ Video Freshness: {freshness}" if freshness != 'N/A' else "└─ Video Freshness: N/A")
                         
                         if details:
                             st.markdown("**📢 Score Contributions**")
@@ -732,7 +790,8 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
                     
                     with col2:
                         st.markdown("**💰 Commercial Intent**")
-                        st.write(f"Search Volume: {result['Search Volume']:,}" if result['Search Volume'] != 'N/A' else "Search Volume: N/A")
+                        volume = result['Search Volume']
+                        st.write(f"Search Volume: {volume:,}" if volume != 'N/A' else "Search Volume: N/A")
                         st.write(f"CPC: ${cpc:.2f}")
                         st.write(f"Monetization: {monetization}")
                         
@@ -761,12 +820,11 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
         st.download_button(
             label="⬇️ Download Results as CSV",
             data=csv_buffer.getvalue(),
-            file_name="keyword_analysis_results.csv",
+            file_name=f"keyword_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
 
 # --- AI ASSET GENERATION SECTION ---
-# Only show if we have results in session state
 if 'analysis_results' in st.session_state and st.session_state['analysis_results']:
     results = st.session_state['analysis_results']
     
@@ -774,7 +832,7 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
     st.markdown("## ✏️ AI Asset Generation")
     st.markdown("Select your winning keywords to generate optimized YouTube titles, descriptions, and tags.")
     
-    # Filter for successful results to populate the selector
+    # Filter for successful results
     successful_keywords = [res['Keyword'] for res in results if res['Competition Score'] != 'N/A']
     
     if successful_keywords:
@@ -796,7 +854,7 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                 with tabs[i]:
                     with st.spinner(f"🤖 Gemini is crafting assets for '{winner}'..."):
                         
-                        # Re-generate the cluster for the selected keyword
+                        # Generate cluster for the selected keyword
                         keyword_cluster = get_youtube_autocomplete_suggestions(winner)
                         if winner not in keyword_cluster:
                             keyword_cluster.insert(0, winner)
@@ -811,6 +869,17 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                             st.subheader("🎬 Generated Titles")
                             st.markdown(parsed_assets["titles"])
                             
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.download_button(
+                                    "📥 Download Titles",
+                                    parsed_assets["titles"],
+                                    file_name=f"{winner.replace(' ', '_')}_titles.txt",
+                                    key=f"download_titles_{i}"
+                                )
+                            
+                            st.markdown("---")
+                            
                             st.subheader("📝 Generated Description - Option 1")
                             st.text_area(
                                 "Description 1 (ready to copy)",
@@ -818,6 +887,15 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                                 height=250,
                                 key=f"desc1_{i}"
                             )
+                            
+                            st.download_button(
+                                "📥 Download Description 1",
+                                parsed_assets["description1"],
+                                file_name=f"{winner.replace(' ', '_')}_desc1.txt",
+                                key=f"download_desc1_{i}"
+                            )
+                            
+                            st.markdown("---")
                             
                             st.subheader("📝 Generated Description - Option 2")
                             st.text_area(
@@ -827,6 +905,15 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                                 key=f"desc2_{i}"
                             )
                             
+                            st.download_button(
+                                "📥 Download Description 2",
+                                parsed_assets["description2"],
+                                file_name=f"{winner.replace(' ', '_')}_desc2.txt",
+                                key=f"download_desc2_{i}"
+                            )
+                            
+                            st.markdown("---")
+                            
                             st.subheader("🏷️ Generated Tags")
                             st.text_area(
                                 "Tags (ready to copy - comma separated, no hashtags)",
@@ -834,10 +921,17 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                                 height=100,
                                 key=f"tags_{i}"
                             )
+                            
+                            st.download_button(
+                                "📥 Download Tags",
+                                parsed_assets["tags"],
+                                file_name=f"{winner.replace(' ', '_')}_tags.txt",
+                                key=f"download_tags_{i}"
+                            )
                         else:
                             st.error(generated_assets_text)
     else:
-        st.info("No successful keyword analyses found. Please run an analysis first.")
+        st.info("ℹ️ No successful keyword analyses found. Please run an analysis first.")
 
 # Footer
 st.markdown("---")
