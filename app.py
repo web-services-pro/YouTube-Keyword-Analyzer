@@ -447,14 +447,14 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster, 
 
 {intent_instruction}
 
-**Supporting Keyword Cluster (use these concepts naturally):** "{cluster_string}"
+**Supporting Keyword Cluster and LSI-related Keywords (use these concepts naturally):** "{cluster_string}"
 
-**Your Task:** Generate 3 titles, 2 SEO-optimized description variations, and a list of video tags based on the provided keywords. ALL CONTENT MUST ALIGN WITH THE {keyword_intent.upper()} INTENT specified above. Follow the output format below EXACTLY using the specified markdown headers.
+**Your Task:** Generate 3 titles, 2 SEO-optimized description variations, and a list of video tags based on the provided keywords. ALL CONTENT MUST ALIGN WITH THE {keyword_intent.upper()} INTENT specified above, and optimized to completely satisfy the query of the user/searcher. Follow the output format below EXACTLY using the specified markdown headers.
 
 ---
 
 ### TITLES
-(Generate 3 distinct, clickable, SEO-optimized title options which are compelling and hook-focused. Each title must be under 90 characters and in Title Case.)
+(Generate 3 distinct, clickable, SEO-optimized title options which are compelling and hook-focused. A compelliing title is one that irresistably promises to answer and satisfy the searcher query. Each title must be under 95 characters and in Title Case.)
 1. 
 2. 
 3. 
@@ -462,22 +462,22 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster, 
 ---
 
 ### DESCRIPTION 1
-(Generate the first SEO-optimized description variation - under 2000 characters - with the following structure:
+(Generate the first SEO-optimized description variation - under 2500 characters - with the following structure:
 1. The first line should be a repeat of one of the 3 Titles.
-2. The second line is a Call to Action, like "➡️ Get my free guide here: [LINK]".
-3. Write 2-3 paragraphs that naturally incorporate the main keyword and several supporting keywords from the cluster. Provide value and entice viewers to watch.
+2. The second line is a Call to Action relevant to the searcher query and keyword intent, like "➡️ Get my free guide here: [LINK]" for an Informational keyword.
+3. Write 2-3 paragraphs that naturally incorporate the main keyword 2-3 times and several supporting keywords from the cluster. Provide value and entice viewers to watch.
 4. Add a list of 3-5 relevant hashtags based on the keyword cluster.
 5. End with a repeat of the Call to Action.)
 
 ---
 
 ### DESCRIPTION 2
-(Generate the second SEO-optimized description variation - under 2000 characters - with a different angle than Description 1. Use the same structure but vary the writing style and emphasis.)
+(Generate the second SEO-optimized description variation - under 2500 characters - with a different angle than Description 1. Use the same structure but vary the writing style and emphasis.)
 
 ---
 
 ### TAGS
-(Provide a single, comma-separated list of 15-20 highly relevant keywords. Include the main keyword, keywords from the cluster, and add relevant variations like plurals, synonyms, and re-ordered phrases. Keep spaces in multi-word keywords. This should be ready to copy and paste into the YouTube tag field. Do NOT include hashtag symbols.)
+(Provide a single, comma-separated list of 7-12 highly relevant keywords. Include the main keyword first, supporting keywords from the cluster, and add relevant variations like plurals, synonyms, and re-ordered phrases. Keep spaces in multi-word keywords. This should be ready to copy and paste into the YouTube tag field. Do NOT include hashtag symbols. Maximum 480 characters altogether.)
 """
         
         response = model.generate_content(prompt)
