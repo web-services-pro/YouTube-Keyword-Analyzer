@@ -367,7 +367,7 @@ def get_recommendation(score, cpc):
     
     return competition, advice, monetization
 
-def analyze_keyword(youtube, keyword, ke_api_key):
+def analyze_keyword(youtube, keyword, ke_api_key, intent_map=None):
     """Analyzes a single keyword and returns results."""
     youtube_videos = get_youtube_search_results(youtube, keyword)
     ke_data = get_keywords_everywhere_data(keyword, ke_api_key)
@@ -384,9 +384,13 @@ def analyze_keyword(youtube, keyword, ke_api_key):
             cpc_value = float(ke_data.get('cpc', {}).get('value', 0.00))
         except (ValueError, TypeError):
             cpc_value = 0.00
+    
+    # Get intent from the pre-computed intent map
+    keyword_intent = intent_map.get(keyword, "Informational") if intent_map else "Informational"
 
     result = {
         "Keyword": keyword,
+        "Intent": keyword_intent,
         "Competition Score": yt_competition.get('composite_score', 'N/A'),
         "Direct Competition %": f"{yt_competition.get('direct_competition', 0) * 100:.0f}%" if yt_competition.get('direct_competition') != 'N/A' else 'N/A',
         "Avg Top 10 Views": yt_competition.get('authority_views', 'N/A'),
@@ -399,7 +403,7 @@ def analyze_keyword(youtube, keyword, ke_api_key):
     }
 
     return result
-
+    
 def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster, keyword_intent):
     """Uses Google's Gemini Pro to generate a complete YouTube asset package aligned with keyword intent."""
     try:
@@ -506,6 +510,126 @@ def parse_gemini_output(text):
             "tags": "Could not parse tags."
         }
 
+# ADD THESE NEW FUNCTIONS AFTER parse_gemini_output
+
+def build_classification_prompt(keywords_list):
+    """Builds the final prompt string to send to the AI for intent classification."""
+    
+    # Convert the list of keywords into a simple string list
+    keywords_string = "\n".join(f"- \"{kw}\"" for kw in keywords_list)
+
+    prompt_template = f"""
+    You are an expert SEO and marketing analyst. Your task is to classify a list 
+    of user-provided keywords into one of three search intent categories:
+    
+    1.  **Commercial**: The user is looking to buy, hire, or take a specific 
+        commercial action. (e.g., "buy," "price," "best," "review," "service").
+    2.  **Informational**: The user is looking for information. (e.g., "how to," 
+        "what is," "guide," "why").
+    3.  **Navigational**: The user is trying to go to a specific website or brand.
+        (e.g., "gmail login," "facebook," "official website").
+
+    Here are some examples of perfect classification:
+
+    <example>
+    Keywords:
+    - "buy red shoes"
+    - "best coffee maker 2024"
+    - "how to fix a leaky faucet"
+    - "youtube"
+    - "python tutorial"
+    - "semrush pricing"
+    
+    Classification:
+    [
+      {{"keyword": "buy red shoes", "intent": "Commercial"}},
+      {{"keyword": "best coffee maker 2024", "intent": "Commercial"}},
+      {{"keyword": "how to fix a leaky faucet", "intent": "Informational"}},
+      {{"keyword": "youtube", "intent": "Navigational"}},
+      {{"keyword": "python tutorial", "intent": "Informational"}},
+      {{"keyword": "semrush pricing", "intent": "Commercial"}}
+    ]
+    </example>
+    
+    Now, please classify the following list of keywords. 
+    Respond ONLY with a valid JSON array. Do not include any other text or 
+    markdown formatting (like ```json) in your response.
+
+    Keywords:
+    {keywords_string}
+    
+    Classification:
+    """
+    return prompt_template
+
+
+def classify_keywords_with_ai(keywords_list, api_key):
+    """
+    Classifies a list of keywords using the Gemini AI.
+
+    Args:
+        keywords_list: A list of keyword strings.
+        api_key: Google AI API key for Gemini.
+
+    Returns:
+        A dictionary mapping keywords to intents, e.g.,
+        {'buy shoes': 'Commercial', 'how to code': 'Informational', ...}
+    """
+    if not keywords_list:
+        return {}
+    
+    if not api_key:
+        st.error("⚠️ Gemini API key required for AI-powered intent classification!")
+        return {}
+
+    try:
+        # Initialize the Gemini model
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            'gemini-2.5-flash',
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json"
+            )
+        )
+
+        # Build the prompt with the keywords
+        prompt = build_classification_prompt(keywords_list)
+
+        # Send the request to the AI
+        response = model.generate_content(prompt)
+        
+        # Parse the JSON response
+        classifications = json.loads(response.text)
+        
+        # Convert to a dictionary for easy lookup
+        intent_map = {}
+        for item in classifications:
+            keyword = item.get('keyword', '')
+            intent = item.get('intent', 'Informational')
+            intent_map[keyword] = intent
+        
+        return intent_map
+    
+    except Exception as e:
+        st.error(f"Error classifying keywords with AI: {e}")
+        # Return default "Informational" for all keywords on error
+        return {kw: "Informational" for kw in keywords_list}
+
+
+def filter_keywords_by_intent(all_keywords, target_intent_map):
+    """
+    Filters keywords to only include those matching their seed's intent.
+    
+    Args:
+        all_keywords: List of all keywords (seeds + expanded)
+        target_intent_map: Dict mapping each keyword to its intent
+    
+    Returns:
+        Filtered list of keywords
+    """
+    # This function is simplified since we now classify all at once
+    return all_keywords
+    
 # --- MAIN APP ---
 
 # Input area
@@ -537,38 +661,43 @@ if len(seed_keywords) > 5:
 # Initialize the final keyword list
 keywords_list = []
 
-# === EXPANSION LOGIC WITH INTENT FILTERING ===
+# === EXPANSION LOGIC WITH AI-POWERED INTENT FILTERING ===
 if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
     
-    # Check for required API key upfront
+    # Check for required API keys upfront
     if not ke_api_key:
-        st.error("⚠️ Keywords Everywhere API key is required for keyword expansion with intent filtering!")
+        st.error("⚠️ Keywords Everywhere API key is required for keyword expansion!")
+        st.stop()
+    
+    if not gemini_api_key:
+        st.error("⚠️ Google AI (Gemini) API key is required for AI-powered intent classification!")
         st.stop()
     
     # Use a set to track unique keywords
     all_keywords = list(seed_keywords)
     seen = set(seed_keywords)
     
-    # Store intent for each seed keyword
-    seed_intents = {}
-    
     # Show expansion status
-    with st.spinner("🔍 Expanding keywords with intent filtering..."):
+    with st.spinner("🔍 Expanding keywords..."):
         expansion_status = st.empty()
         failed_expansions = []
         
+        # STEP 1: Classify seed keywords first
+        expansion_status.text(f"🤖 Classifying intent for {len(seed_keywords)} seed keyword(s) with AI...")
+        seed_intent_map = classify_keywords_with_ai(seed_keywords, gemini_api_key)
+        
+        # Store each seed with its intent
+        seed_to_intent = {}
+        for seed in seed_keywords:
+            seed_to_intent[seed] = seed_intent_map.get(seed, "Informational")
+        
+        # STEP 2: Expand each seed keyword
         for i, seed in enumerate(seed_keywords):
-            expansion_status.text(f"Classifying intent for '{seed}' ({i+1}/{len(seed_keywords)})...")
+            seed_intent = seed_to_intent[seed]
+            expansion_status.text(f"Expanding '{seed}' ({seed_intent} intent) ({i+1}/{len(seed_keywords)})...")
             
             try:
-                # First, classify the seed keyword's intent
-                ke_data = get_keywords_everywhere_data(seed, ke_api_key)
-                seed_intent = classify_keyword_intent(seed, ke_data)
-                seed_intents[seed] = seed_intent
-                
-                expansion_status.text(f"Expanding '{seed}' ({seed_intent} intent) ({i+1}/{len(seed_keywords)})...")
-                
-                # Collect candidate keywords
+                # Collect candidate keywords for this seed
                 candidate_keywords = []
                 
                 # 1. Autocomplete Expansion
@@ -579,6 +708,7 @@ if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
                 
                 # 2. Related & PAA Expansion
                 if expand_related or expand_paa:
+                    ke_data = get_keywords_everywhere_data(seed, ke_api_key)
                     if ke_data:
                         # Add Related Keywords
                         if expand_related:
@@ -604,23 +734,26 @@ if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
                             
                             candidate_keywords.extend(paa)
                 
-                # Remove duplicates from candidates
-                candidate_keywords = list(set([kw for kw in candidate_keywords if kw and kw not in seen]))
+                # Remove duplicates and already-seen keywords
+                unique_candidates = []
+                for kw in candidate_keywords:
+                    if kw and kw not in seen:
+                        unique_candidates.append(kw)
+                        seen.add(kw)  # Mark as seen immediately
                 
-                # Filter candidates by intent
-                expansion_status.text(f"Filtering {len(candidate_keywords)} candidates by {seed_intent} intent...")
-                
-                for candidate in candidate_keywords:
-                    # Get intent for candidate
-                    candidate_ke_data = get_keywords_everywhere_data(candidate, ke_api_key)
-                    candidate_intent = classify_keyword_intent(candidate, candidate_ke_data)
+                if unique_candidates:
+                    # STEP 3: Classify all candidate keywords with AI
+                    expansion_status.text(f"🤖 AI classifying {len(unique_candidates)} candidates for '{seed}'...")
+                    candidate_intent_map = classify_keywords_with_ai(unique_candidates, gemini_api_key)
                     
-                    # Only add if intent matches
-                    if candidate_intent == seed_intent:
-                        all_keywords.append(candidate)
-                        seen.add(candidate)
-                    
-                    time.sleep(0.3)  # Rate limiting
+                    # STEP 4: Filter by matching intent
+                    expansion_status.text(f"🎯 Filtering candidates by {seed_intent} intent...")
+                    for candidate in unique_candidates:
+                        candidate_intent = candidate_intent_map.get(candidate, "Informational")
+                        
+                        # Only add if intent matches the seed's intent
+                        if candidate_intent == seed_intent:
+                            all_keywords.append(candidate)
                 
                 time.sleep(0.5)
                 
@@ -632,15 +765,16 @@ if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
         
         # Show expansion results with intent breakdown
         if len(all_keywords) > len(seed_keywords):
-            st.success(f"✅ Expanded from {len(seed_keywords)} seed(s) to {len(all_keywords)} unique keywords (intent-filtered)!")
+            st.success(f"✅ Expanded from {len(seed_keywords)} seed(s) to {len(all_keywords)} unique keywords (AI intent-filtered)!")
             
             # Show intent breakdown
             with st.expander("📊 Intent Classification Summary"):
-                for seed, intent in seed_intents.items():
-                    matching_count = sum(1 for kw in all_keywords if kw != seed)
-                    st.write(f"**{seed}**: {intent} intent ({matching_count} related keywords found)")
+                for seed, intent in seed_to_intent.items():
+                    # Count how many keywords match this seed
+                    seed_related_count = len([kw for kw in all_keywords if kw != seed]) // len(seed_keywords)
+                    st.write(f"**{seed}**: {intent} intent")
         else:
-            st.warning(f"⚠️ No additional keywords found. Using {len(seed_keywords)} original seed(s).")
+            st.warning(f"⚠️ No additional keywords found matching intent criteria. Using {len(seed_keywords)} original seed(s).")
         
         # Show failed expansions if any
         if failed_expansions:
@@ -649,11 +783,20 @@ if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
                     st.warning(f"**{keyword}**: {error}")
         
         keywords_list = all_keywords
+        
+        # Store the intent map in session state for later use
+        st.session_state['seed_intent_map'] = seed_to_intent
 
 else:
     # No expansion - use seed keywords directly
     keywords_list = seed_keywords
-
+    
+    # Still classify seeds even without expansion
+    if seed_keywords and gemini_api_key:
+        with st.spinner("🤖 Classifying keyword intent with AI..."):
+            seed_intent_map = classify_keywords_with_ai(seed_keywords, gemini_api_key)
+            st.session_state['seed_intent_map'] = seed_intent_map
+            
 # === KEYWORD TRIMMING ===
 if len(keywords_list) > 99:
     st.warning(f"⚠️ You have {len(keywords_list)} keywords, but we're limiting to 99 for analysis.")
@@ -682,6 +825,10 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
         st.error("⚠️ Please enter both YouTube and Keywords Everywhere API keys in the sidebar!")
         st.stop()
     
+    if not gemini_api_key:
+        st.error("⚠️ Please enter your Google AI (Gemini) API key in the sidebar for intent classification!")
+        st.stop()
+    
     # Initialize YouTube client
     try:
         youtube = get_youtube_client(youtube_api_key)
@@ -693,6 +840,14 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    # STEP 0: Classify all keywords with AI if not already done
+    if 'keyword_intent_map' not in st.session_state:
+        status_text.text("🤖 Classifying keyword intent with AI...")
+        keyword_intent_map = classify_keywords_with_ai(keywords_list, gemini_api_key)
+        st.session_state['keyword_intent_map'] = keyword_intent_map
+    else:
+        keyword_intent_map = st.session_state['keyword_intent_map']
+    
     results = []
     
     # Analyze each keyword
@@ -700,7 +855,7 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
         status_text.text(f"Analyzing: {keyword} ({i+1}/{len(keywords_list)})")
         
         try:
-            result = analyze_keyword(youtube, keyword, ke_api_key)
+            result = analyze_keyword(youtube, keyword, ke_api_key, keyword_intent_map)
             results.append(result)
             
             progress_bar.progress((i + 1) / len(keywords_list))
@@ -853,9 +1008,18 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
                         st.write(f"CPC: ${cpc:.2f}")
                         st.write(f"Monetization: {monetization}")
                         
+                        st.markdown("**🎯 Keyword Intent**")
+                        intent = result.get('Intent', 'Unknown')
+                        intent_emoji = {
+                            'Commercial': '💰',
+                            'Informational': '📚',
+                            'Navigational': '🧭'
+                        }.get(intent, '❓')
+                        st.info(f"{intent_emoji} **{intent}**")
+                        
                         st.markdown("**💡 Recommendation**")
                         st.info(f"{advice}")
-                        
+                                                
                         # Visual score bar
                         st.markdown("**Competition Level**")
                         if score < 30:
