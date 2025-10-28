@@ -400,21 +400,52 @@ def analyze_keyword(youtube, keyword, ke_api_key):
 
     return result
 
-def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster):
-    """Uses Google's Gemini Pro to generate a complete YouTube asset package."""
+def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster, keyword_intent):
+    """Uses Google's Gemini Pro to generate a complete YouTube asset package aligned with keyword intent."""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
         cluster_string = ", ".join(keyword_cluster[:10])
+        
+        # Intent-specific instructions
+        intent_instructions = {
+            'Commercial': """
+**INTENT: COMMERCIAL** - This keyword has buyer/purchase intent. Your content should:
+- Focus on product comparisons, reviews, buying guides, or service recommendations
+- Include CTAs for purchasing, signing up, or taking action
+- Emphasize value propositions, benefits, and solutions
+- Use action-oriented language (best, top, compare, review, buy, get)
+- Address pain points and how products/services solve them
+""",
+            'Informational': """
+**INTENT: INFORMATIONAL** - This keyword seeks knowledge/education. Your content should:
+- Focus on teaching, explaining, or providing how-to guidance
+- Be educational and value-driven without heavy sales pitches
+- Use tutorial-style language (how to, guide, learn, understand, explained)
+- Provide step-by-step instructions or comprehensive explanations
+- Build authority and trust through expertise
+""",
+            'Navigational': """
+**INTENT: NAVIGATIONAL** - This keyword seeks a specific destination. Your content should:
+- Focus on official resources, login pages, or specific brand content
+- Be authoritative and direct
+- Include brand names and official terminology
+- Help users navigate to their intended destination
+"""
+        }
+        
+        intent_instruction = intent_instructions.get(keyword_intent, intent_instructions['Informational'])
 
         prompt = f"""You are a world-class YouTube SEO strategist and expert copywriter. Your goal is to create a complete, highly-optimized asset package for a YouTube video.
 
 **Main Target Keyword:** "{main_keyword}"
 
+{intent_instruction}
+
 **Supporting Keyword Cluster (use these concepts naturally):** "{cluster_string}"
 
-**Your Task:** Generate 3 titles, 2 SEO-optimized description variations, and a list of video tags based on the provided keywords. Follow the output format below EXACTLY using the specified markdown headers.
+**Your Task:** Generate 3 titles, 2 SEO-optimized description variations, and a list of video tags based on the provided keywords. ALL CONTENT MUST ALIGN WITH THE {keyword_intent.upper()} INTENT specified above. Follow the output format below EXACTLY using the specified markdown headers.
 
 ---
 
@@ -506,39 +537,48 @@ if len(seed_keywords) > 5:
 # Initialize the final keyword list
 keywords_list = []
 
-# === EXPANSION LOGIC ===
+# === EXPANSION LOGIC WITH INTENT FILTERING ===
 if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
     
     # Check for required API key upfront
-    if (expand_related or expand_paa) and not ke_api_key:
-        st.error("⚠️ Keywords Everywhere API key is required for Related Keywords and People Also Ask expansion!")
+    if not ke_api_key:
+        st.error("⚠️ Keywords Everywhere API key is required for keyword expansion with intent filtering!")
         st.stop()
     
     # Use a set to track unique keywords
     all_keywords = list(seed_keywords)
     seen = set(seed_keywords)
     
+    # Store intent for each seed keyword
+    seed_intents = {}
+    
     # Show expansion status
-    with st.spinner("🔍 Expanding keywords..."):
+    with st.spinner("🔍 Expanding keywords with intent filtering..."):
         expansion_status = st.empty()
         failed_expansions = []
         
         for i, seed in enumerate(seed_keywords):
-            expansion_status.text(f"Expanding '{seed}' ({i+1}/{len(seed_keywords)})...")
+            expansion_status.text(f"Classifying intent for '{seed}' ({i+1}/{len(seed_keywords)})...")
             
             try:
+                # First, classify the seed keyword's intent
+                ke_data = get_keywords_everywhere_data(seed, ke_api_key)
+                seed_intent = classify_keyword_intent(seed, ke_data)
+                seed_intents[seed] = seed_intent
+                
+                expansion_status.text(f"Expanding '{seed}' ({seed_intent} intent) ({i+1}/{len(seed_keywords)})...")
+                
+                # Collect candidate keywords
+                candidate_keywords = []
+                
                 # 1. Autocomplete Expansion
                 if expand_autocomplete:
                     suggestions = get_youtube_autocomplete_suggestions(seed)
                     if suggestions:
-                        for sugg in suggestions:
-                            if sugg and sugg not in seen:
-                                all_keywords.append(sugg)
-                                seen.add(sugg)
+                        candidate_keywords.extend(suggestions)
                 
                 # 2. Related & PAA Expansion
                 if expand_related or expand_paa:
-                    ke_data = get_keywords_everywhere_data(seed, ke_api_key)
                     if ke_data:
                         # Add Related Keywords
                         if expand_related:
@@ -550,10 +590,7 @@ if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
                             else:
                                 related = []
                             
-                            for rel in related:
-                                if rel and rel not in seen:
-                                    all_keywords.append(rel)
-                                    seen.add(rel)
+                            candidate_keywords.extend(related)
                         
                         # Add People Also Ask
                         if expand_paa:
@@ -565,10 +602,25 @@ if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
                             else:
                                 paa = []
                             
-                            for question in paa:
-                                if question and question not in seen:
-                                    all_keywords.append(question)
-                                    seen.add(question)
+                            candidate_keywords.extend(paa)
+                
+                # Remove duplicates from candidates
+                candidate_keywords = list(set([kw for kw in candidate_keywords if kw and kw not in seen]))
+                
+                # Filter candidates by intent
+                expansion_status.text(f"Filtering {len(candidate_keywords)} candidates by {seed_intent} intent...")
+                
+                for candidate in candidate_keywords:
+                    # Get intent for candidate
+                    candidate_ke_data = get_keywords_everywhere_data(candidate, ke_api_key)
+                    candidate_intent = classify_keyword_intent(candidate, candidate_ke_data)
+                    
+                    # Only add if intent matches
+                    if candidate_intent == seed_intent:
+                        all_keywords.append(candidate)
+                        seen.add(candidate)
+                    
+                    time.sleep(0.3)  # Rate limiting
                 
                 time.sleep(0.5)
                 
@@ -578,9 +630,15 @@ if seed_keywords and (expand_autocomplete or expand_related or expand_paa):
         
         expansion_status.empty()
         
-        # Show expansion results
+        # Show expansion results with intent breakdown
         if len(all_keywords) > len(seed_keywords):
-            st.success(f"✅ Expanded from {len(seed_keywords)} seed(s) to {len(all_keywords)} unique keywords!")
+            st.success(f"✅ Expanded from {len(seed_keywords)} seed(s) to {len(all_keywords)} unique keywords (intent-filtered)!")
+            
+            # Show intent breakdown
+            with st.expander("📊 Intent Classification Summary"):
+                for seed, intent in seed_intents.items():
+                    matching_count = sum(1 for kw in all_keywords if kw != seed)
+                    st.write(f"**{seed}**: {intent} intent ({matching_count} related keywords found)")
         else:
             st.warning(f"⚠️ No additional keywords found. Using {len(seed_keywords)} original seed(s).")
         
@@ -824,12 +882,14 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
             mime="text/csv"
         )
 
-# --- AI ASSET GENERATION SECTION ---
+# This section is separate from the analysis results display, so both remain visible
 if 'analysis_results' in st.session_state and st.session_state['analysis_results']:
     results = st.session_state['analysis_results']
     
     st.markdown("---")
+    st.markdown("---")  # Extra separator for clarity
     st.markdown("## ✏️ AI Asset Generation")
+    st.info("💡 **Tip:** The analysis results above will remain visible. You can reference them while generating assets.")
     st.markdown("Select your winning keywords to generate optimized YouTube titles, descriptions, and tags.")
     
     # Filter for successful results
@@ -859,24 +919,61 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                         if winner not in keyword_cluster:
                             keyword_cluster.insert(0, winner)
                         
-                        # Call the Gemini function
-                        generated_assets_text = generate_youtube_assets_with_gemini(gemini_api_key, winner, keyword_cluster)
+                        # Get the intent for this keyword
+                        winner_result = next((r for r in results if r['Keyword'] == winner), None)
+                        winner_intent = winner_result.get('Intent', 'Informational') if winner_result else 'Informational'
+                        
+                        st.info(f"🎯 Generating {winner_intent}-intent content for '{winner}'")
+                        
+                        # Call the Gemini function with intent
+                        generated_assets_text = generate_youtube_assets_with_gemini(gemini_api_key, winner, keyword_cluster, winner_intent)
                         
                         if "Error:" not in generated_assets_text:
                             # Parse the structured output
                             parsed_assets = parse_gemini_output(generated_assets_text)
                             
+                            # Create combined metadata file
+                            combined_metadata = f"""
+========================================
+YOUTUBE METADATA FOR: {winner}
+========================================
+
+{parsed_assets["titles"]}
+
+========================================
+DESCRIPTION - OPTION 1
+========================================
+
+{parsed_assets["description1"]}
+
+========================================
+DESCRIPTION - OPTION 2
+========================================
+
+{parsed_assets["description2"]}
+
+========================================
+TAGS
+========================================
+
+{parsed_assets["tags"]}
+
+========================================
+"""
+                            
+                            # Download button for combined metadata
+                            st.download_button(
+                                "📥 Download Complete Metadata",
+                                combined_metadata,
+                                file_name=f"{winner.replace(' ', '_')}_complete_metadata.txt",
+                                key=f"download_metadata_{i}",
+                                type="primary"
+                            )
+                            
+                            st.markdown("---")
+                            
                             st.subheader("🎬 Generated Titles")
                             st.markdown(parsed_assets["titles"])
-                            
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.download_button(
-                                    "📥 Download Titles",
-                                    parsed_assets["titles"],
-                                    file_name=f"{winner.replace(' ', '_')}_titles.txt",
-                                    key=f"download_titles_{i}"
-                                )
                             
                             st.markdown("---")
                             
@@ -886,13 +983,6 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                                 value=parsed_assets["description1"],
                                 height=250,
                                 key=f"desc1_{i}"
-                            )
-                            
-                            st.download_button(
-                                "📥 Download Description 1",
-                                parsed_assets["description1"],
-                                file_name=f"{winner.replace(' ', '_')}_desc1.txt",
-                                key=f"download_desc1_{i}"
                             )
                             
                             st.markdown("---")
@@ -905,13 +995,6 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                                 key=f"desc2_{i}"
                             )
                             
-                            st.download_button(
-                                "📥 Download Description 2",
-                                parsed_assets["description2"],
-                                file_name=f"{winner.replace(' ', '_')}_desc2.txt",
-                                key=f"download_desc2_{i}"
-                            )
-                            
                             st.markdown("---")
                             
                             st.subheader("🏷️ Generated Tags")
@@ -920,13 +1003,6 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
                                 value=parsed_assets["tags"],
                                 height=100,
                                 key=f"tags_{i}"
-                            )
-                            
-                            st.download_button(
-                                "📥 Download Tags",
-                                parsed_assets["tags"],
-                                file_name=f"{winner.replace(' ', '_')}_tags.txt",
-                                key=f"download_tags_{i}"
                             )
                         else:
                             st.error(generated_assets_text)
