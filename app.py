@@ -798,19 +798,19 @@ else:
             st.session_state['seed_intent_map'] = seed_intent_map
             
 # === KEYWORD TRIMMING ===
-if len(keywords_list) > 99:
-    st.warning(f"⚠️ You have {len(keywords_list)} keywords, but we're limiting to 99 for analysis.")
+if len(keywords_list) > 50:
+    st.warning(f"⚠️ You have {len(keywords_list)} keywords, but we're limiting to 50 for analysis.")
     
     st.markdown("#### ✂️ Select Keywords to Analyze")
     keywords_list = st.multiselect(
-        f"Select up to 99 keywords to analyze:",
+        f"Select up to 50 keywords to analyze:",
         options=keywords_list,
-        default=keywords_list[:99],
+        default=keywords_list[:50],
         help="Choose which keywords you want to analyze"
     )
     
-    if len(keywords_list) > 99:
-        st.error(f"❌ Please select exactly 99 or fewer keywords. You currently have {len(keywords_list)} selected.")
+    if len(keywords_list) > 50:
+        st.error(f"❌ Please select exactly 50 or fewer keywords. You currently have {len(keywords_list)} selected.")
         st.stop()
 
 # Show keyword count
@@ -872,184 +872,186 @@ if st.button("🚀 Analyze Keywords", type="primary", disabled=not keywords_list
     
     # Store results in session state
     st.session_state['analysis_results'] = results
-    
-    # Display results
-    if results:
-        st.markdown("---")
-        st.markdown("## 📊 Analysis Results")
-        
-        # Create DataFrame
-        df = pd.DataFrame(results)
-        
-        # Filter section
-        st.markdown("### 🎯 Filter Results")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            max_competition = st.slider("Max Competition Score", 0, 100, 100)
-        with col2:
-            min_cpc = st.number_input("Min CPC ($)", 0.0, 20.0, 0.0, 0.1)
-        with col3:
-            min_volume = st.number_input("Min Search Volume", 0, 1000000, 0, 100)
-        
-        # Apply filters
-        filtered_df = df.copy()
-        if max_competition < 100:
-            filtered_df = filtered_df[
-                (filtered_df['Competition Score'] == 'N/A') | 
-                (filtered_df['Competition Score'] <= max_competition)
-            ]
-        if min_cpc > 0:
-            filtered_df = filtered_df[filtered_df['CPC'] >= min_cpc]
-        if min_volume > 0:
-            filtered_df = filtered_df[
-                (filtered_df['Search Volume'] == 'N/A') | 
-                (filtered_df['Search Volume'] >= min_volume)
-            ]
-        
-        # Sort section
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            sort_by = st.selectbox(
-                "Sort by:",
-                ["Competition Score", "CPC", "Search Volume", "Engagement Rate %", "Keyword"]
-            )
-        with col2:
-            ascending = st.checkbox("Ascending", value=False)
-        
-        # Sort the filtered dataframe
-        try:
-            sorted_df = filtered_df.sort_values(by=sort_by, ascending=ascending)
-        except:
-            sorted_df = filtered_df
-        
-        # Display metrics
-        st.markdown("---")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            valid_scores = sorted_df[sorted_df['Competition Score'] != 'N/A']['Competition Score']
-            avg_score = valid_scores.mean() if len(valid_scores) > 0 else None
-            st.metric("Avg Competition", f"{avg_score:.1f}" if avg_score is not None else "N/A")
-        
-        with col2:
-            low_comp = len(sorted_df[sorted_df['Competition Score'] < 30])
-            st.metric("Low Competition", low_comp)
-        
-        with col3:
-            high_cpc = len(sorted_df[sorted_df['CPC'] > 0.50])
-            st.metric("High Monetization", high_cpc)
-        
-        with col4:
-            valid_engagement = sorted_df[sorted_df['Engagement Rate %'] != 'N/A']['Engagement Rate %']
-            avg_engagement = valid_engagement.mean() if len(valid_engagement) > 0 else None
-            st.metric("Avg Engagement", f"{avg_engagement:.2f}%" if avg_engagement is not None else "N/A")
-        
-        # Display table
-        display_df = sorted_df.drop(columns=['_details'])
-        
-        st.dataframe(
-            display_df.style.format({
-                'CPC': '${:.2f}',
-                'Search Volume': lambda x: f'{x:,.0f}' if x != 'N/A' else 'N/A',
-                'Avg Top 10 Views': lambda x: f'{x:,.0f}' if x != 'N/A' else 'N/A',
-                'Engagement Rate %': lambda x: f'{x:.2f}%' if x != 'N/A' else 'N/A',
-                'Channel Authority': lambda x: f'{x:.2f}' if x != 'N/A' else 'N/A',
-                'Video Freshness': lambda x: f'{x:.2f}' if x != 'N/A' else 'N/A'
-            }, na_rep='N/A'),
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        st.info(f"Showing {len(sorted_df)} of {len(df)} total keywords")
-        
-        # Detailed cards with score breakdown
-        st.markdown("### 🎯 Detailed Analysis")
-        
-        for _, result in sorted_df.iterrows():
-            score = result['Competition Score']
-            cpc = result['CPC']
-            
-            if score != 'N/A':
-                competition, advice, monetization = get_recommendation(score, cpc)
-                
-                with st.expander(f"**{result['Keyword']}** - {competition} (Score: {score})"):
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.markdown("**📊 Competition Breakdown**")
-                        st.write(f"**Overall Score:** {score}/100")
-                        st.write(f"├─ Direct Competition: {result['Direct Competition %']}")
-                        details = result.get('_details', {})
-                        broad = details.get('broad_competition', 'N/A')
-                        st.write(f"└─ Broad Competition: {broad}")
-                        
-                        st.markdown("**💡 Authority Metrics**")
-                        views = result['Avg Top 10 Views']
-                        st.write(f"├─ Avg Views: {views:,}" if views != 'N/A' else "├─ Avg Views: N/A")
-                        engagement = result['Engagement Rate %']
-                        st.write(f"├─ Engagement: {engagement}%" if engagement != 'N/A' else "├─ Engagement: N/A")
-                        authority = result['Channel Authority']
-                        st.write(f"├─ Channel Authority: {authority}" if authority != 'N/A' else "├─ Channel Authority: N/A")
-                        freshness = result['Video Freshness']
-                        st.write(f"└─ Video Freshness: {freshness}" if freshness != 'N/A' else "└─ Video Freshness: N/A")
-                        
-                        if details:
-                            st.markdown("**📢 Score Contributions**")
-                            st.write(f"├─ Views: +{details.get('views_contribution', 0):.2f} pts")
-                            st.write(f"├─ Engagement: +{details.get('engagement_contribution', 0):.2f} pts")
-                            st.write(f"├─ Authority: +{details.get('authority_contribution', 0):.2f} pts")
-                            st.write(f"└─ Freshness: +{details.get('freshness_contribution', 0):.2f} pts")
-                    
-                    with col2:
-                        st.markdown("**💰 Commercial Intent**")
-                        volume = result['Search Volume']
-                        st.write(f"Search Volume: {volume:,}" if volume != 'N/A' else "Search Volume: N/A")
-                        st.write(f"CPC: ${cpc:.2f}")
-                        st.write(f"Monetization: {monetization}")
-                        
-                        st.markdown("**🎯 Keyword Intent**")
-                        intent = result.get('Intent', 'Unknown')
-                        intent_emoji = {
-                            'Commercial': '💰',
-                            'Informational': '📚',
-                            'Navigational': '🧭'
-                        }.get(intent, '❓')
-                        st.info(f"{intent_emoji} **{intent}**")
-                        
-                        st.markdown("**💡 Recommendation**")
-                        st.info(f"{advice}")
-                                                
-                        # Visual score bar
-                        st.markdown("**Competition Level**")
-                        if score < 30:
-                            st.progress(score/100, text=f"🟢 {score}/100 - Low Competition")
-                        elif score < 60:
-                            st.progress(score/100, text=f"🟡 {score}/100 - Medium Competition")
-                        else:
-                            st.progress(score/100, text=f"🔴 {score}/100 - High Competition")
-        
-        # Download button
-        st.markdown("---")
-        
-        # Format dataframe for CSV download
-        df_download = display_df.copy()
-        df_download['CPC'] = df_download['CPC'].apply(lambda x: f"${x:.2f}" if isinstance(x, (int, float)) else x)
-        
-        csv_buffer = StringIO()
-        df_download.to_csv(csv_buffer, index=False)
-        
-        st.download_button(
-            label="⬇️ Download Results as CSV",
-            data=csv_buffer.getvalue(),
-            file_name=f"keyword_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
-        )
 
-# This section is separate from the analysis results display, so both remain visible
+# === DISPLAY RESULTS SECTION (Always visible once analysis is done) ===
+# This section is OUTSIDE the button click handler, so it persists across reruns
 if 'analysis_results' in st.session_state and st.session_state['analysis_results']:
     results = st.session_state['analysis_results']
     
+    st.markdown("---")
+    st.markdown("## 📊 Analysis Results")
+    
+    # Create DataFrame
+    df = pd.DataFrame(results)
+    
+    # Filter section
+    st.markdown("### 🎯 Filter Results")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        max_competition = st.slider("Max Competition Score", 0, 100, 100, key="filter_competition")
+    with col2:
+        min_cpc = st.number_input("Min CPC ($)", 0.0, 20.0, 0.0, 0.1, key="filter_cpc")
+    with col3:
+        min_volume = st.number_input("Min Search Volume", 0, 1000000, 0, 100, key="filter_volume")
+    
+    # Apply filters
+    filtered_df = df.copy()
+    if max_competition < 100:
+        filtered_df = filtered_df[
+            (filtered_df['Competition Score'] == 'N/A') | 
+            (filtered_df['Competition Score'] <= max_competition)
+        ]
+    if min_cpc > 0:
+        filtered_df = filtered_df[filtered_df['CPC'] >= min_cpc]
+    if min_volume > 0:
+        filtered_df = filtered_df[
+            (filtered_df['Search Volume'] == 'N/A') | 
+            (filtered_df['Search Volume'] >= min_volume)
+        ]
+    
+    # Sort section
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        sort_by = st.selectbox(
+            "Sort by:",
+            ["Competition Score", "CPC", "Search Volume", "Engagement Rate %", "Keyword"],
+            key="sort_by"
+        )
+    with col2:
+        ascending = st.checkbox("Ascending", value=False, key="sort_ascending")
+    
+    # Sort the filtered dataframe
+    try:
+        sorted_df = filtered_df.sort_values(by=sort_by, ascending=ascending)
+    except:
+        sorted_df = filtered_df
+    
+    # Display metrics
+    st.markdown("---")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        valid_scores = sorted_df[sorted_df['Competition Score'] != 'N/A']['Competition Score']
+        avg_score = valid_scores.mean() if len(valid_scores) > 0 else None
+        st.metric("Avg Competition", f"{avg_score:.1f}" if avg_score is not None else "N/A")
+    
+    with col2:
+        low_comp = len(sorted_df[sorted_df['Competition Score'] < 30])
+        st.metric("Low Competition", low_comp)
+    
+    with col3:
+        high_cpc = len(sorted_df[sorted_df['CPC'] > 0.50])
+        st.metric("High Monetization", high_cpc)
+    
+    with col4:
+        valid_engagement = sorted_df[sorted_df['Engagement Rate %'] != 'N/A']['Engagement Rate %']
+        avg_engagement = valid_engagement.mean() if len(valid_engagement) > 0 else None
+        st.metric("Avg Engagement", f"{avg_engagement:.2f}%" if avg_engagement is not None else "N/A")
+    
+    # Display table
+    display_df = sorted_df.drop(columns=['_details'])
+    
+    st.dataframe(
+        display_df.style.format({
+            'CPC': '${:.2f}',
+            'Search Volume': lambda x: f'{x:,.0f}' if x != 'N/A' else 'N/A',
+            'Avg Top 10 Views': lambda x: f'{x:,.0f}' if x != 'N/A' else 'N/A',
+            'Engagement Rate %': lambda x: f'{x:.2f}%' if x != 'N/A' else 'N/A',
+            'Channel Authority': lambda x: f'{x:.2f}' if x != 'N/A' else 'N/A',
+            'Video Freshness': lambda x: f'{x:.2f}' if x != 'N/A' else 'N/A'
+        }, na_rep='N/A'),
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    st.info(f"Showing {len(sorted_df)} of {len(df)} total keywords")
+    
+    # Detailed cards with score breakdown
+    st.markdown("### 🎯 Detailed Analysis")
+    
+    for _, result in sorted_df.iterrows():
+        score = result['Competition Score']
+        cpc = result['CPC']
+        
+        if score != 'N/A':
+            competition, advice, monetization = get_recommendation(score, cpc)
+            
+            with st.expander(f"**{result['Keyword']}** - {competition} (Score: {score})"):
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**📊 Competition Breakdown**")
+                    st.write(f"**Overall Score:** {score}/100")
+                    st.write(f"├─ Direct Competition: {result['Direct Competition %']}")
+                    details = result.get('_details', {})
+                    broad = details.get('broad_competition', 'N/A')
+                    st.write(f"└─ Broad Competition: {broad}")
+                    
+                    st.markdown("**💡 Authority Metrics**")
+                    views = result['Avg Top 10 Views']
+                    st.write(f"├─ Avg Views: {views:,}" if views != 'N/A' else "├─ Avg Views: N/A")
+                    engagement = result['Engagement Rate %']
+                    st.write(f"├─ Engagement: {engagement}%" if engagement != 'N/A' else "├─ Engagement: N/A")
+                    authority = result['Channel Authority']
+                    st.write(f"├─ Channel Authority: {authority}" if authority != 'N/A' else "├─ Channel Authority: N/A")
+                    freshness = result['Video Freshness']
+                    st.write(f"└─ Video Freshness: {freshness}" if freshness != 'N/A' else "└─ Video Freshness: N/A")
+                    
+                    if details:
+                        st.markdown("**📢 Score Contributions**")
+                        st.write(f"├─ Views: +{details.get('views_contribution', 0):.2f} pts")
+                        st.write(f"├─ Engagement: +{details.get('engagement_contribution', 0):.2f} pts")
+                        st.write(f"├─ Authority: +{details.get('authority_contribution', 0):.2f} pts")
+                        st.write(f"└─ Freshness: +{details.get('freshness_contribution', 0):.2f} pts")
+                
+                with col2:
+                    st.markdown("**💰 Commercial Intent**")
+                    volume = result['Search Volume']
+                    st.write(f"Search Volume: {volume:,}" if volume != 'N/A' else "Search Volume: N/A")
+                    st.write(f"CPC: ${cpc:.2f}")
+                    st.write(f"Monetization: {monetization}")
+                    
+                    st.markdown("**🎯 Keyword Intent**")
+                    intent = result.get('Intent', 'Unknown')
+                    intent_emoji = {
+                        'Commercial': '💰',
+                        'Informational': '📚',
+                        'Navigational': '🧭'
+                    }.get(intent, '❓')
+                    st.info(f"{intent_emoji} **{intent}**")
+                    
+                    st.markdown("**💡 Recommendation**")
+                    st.info(f"{advice}")
+                                            
+                    # Visual score bar
+                    st.markdown("**Competition Level**")
+                    if score < 30:
+                        st.progress(score/100, text=f"🟢 {score}/100 - Low Competition")
+                    elif score < 60:
+                        st.progress(score/100, text=f"🟡 {score}/100 - Medium Competition")
+                    else:
+                        st.progress(score/100, text=f"🔴 {score}/100 - High Competition")
+    
+    # Download button
+    st.markdown("---")
+    
+    # Format dataframe for CSV download
+    df_download = display_df.copy()
+    df_download['CPC'] = df_download['CPC'].apply(lambda x: f"${x:.2f}" if isinstance(x, (int, float)) else x)
+    
+    csv_buffer = StringIO()
+    df_download.to_csv(csv_buffer, index=False)
+    
+    st.download_button(
+        label="⬇️ Download Results as CSV",
+        data=csv_buffer.getvalue(),
+        file_name=f"keyword_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv"
+    )
+    
+    # === AI ASSET GENERATION SECTION ===
+    # This section is separate but within the same results check
     st.markdown("---")
     st.markdown("---")  # Extra separator for clarity
     st.markdown("## ✏️ AI Asset Generation")
@@ -1063,10 +1065,11 @@ if 'analysis_results' in st.session_state and st.session_state['analysis_results
         selected_winners = st.multiselect(
             "Select winning keywords to generate AI assets for:",
             options=successful_keywords,
-            help="Choose keywords with good potential for AI-powered content generation."
+            help="Choose keywords with good potential for AI-powered content generation.",
+            key="winner_selector"
         )
 
-        if st.button("✨ Generate AI Assets for Selected Keywords", disabled=not selected_winners, type="primary"):
+        if st.button("✨ Generate AI Assets for Selected Keywords", disabled=not selected_winners, type="primary", key="generate_assets_btn"):
             if not gemini_api_key:
                 st.error("⚠️ Please enter your Google AI (Gemini) API key in the sidebar!")
                 st.stop()
@@ -1176,7 +1179,7 @@ TAGS
 # Footer
 st.markdown("---")
 st.markdown(
-    "<div style='text-align: center; color: #666;'>Built with Streamlit | "
+    "<div style='text-align: center; color: #666;'>Built by Web Services Pro | "
     "Powered by YouTube Data API, Keywords Everywhere & Google Gemini</div>",
     unsafe_allow_html=True
 )
