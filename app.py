@@ -407,8 +407,7 @@ def analyze_keyword(youtube, keyword, ke_api_key, intent_map=None):
 def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster, keyword_intent):
     """Uses Google's Gemini Pro to generate a complete YouTube asset package aligned with keyword intent."""
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        client = genai.Client(api_key=api_key)
 
         cluster_string = ", ".join(keyword_cluster[:10])
         
@@ -480,7 +479,10 @@ def generate_youtube_assets_with_gemini(api_key, main_keyword, keyword_cluster, 
 (Provide a single, comma-separated list of 7-12 highly relevant keywords. Include the main keyword first, supporting keywords from the cluster, and add relevant variations like plurals, synonyms, and re-ordered phrases. Keep spaces in multi-word keywords. This should be ready to copy and paste into the YouTube tag field. Do NOT include hashtag symbols. Maximum 480 characters altogether.)
 """
         
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
         return response.text
     
     except Exception as e:
@@ -583,20 +585,20 @@ def classify_keywords_with_ai(keywords_list, api_key):
         return {}
 
     try:
-        # Initialize the Gemini model
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            'gemini-2.5-flash',
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json"
-            )
-        )
+        # Initialize the Gemini client
+        client = genai.Client(api_key=api_key)
 
         # Build the prompt with the keywords
         prompt = build_classification_prompt(keywords_list)
 
         # Send the request to the AI
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config={
+                'response_mime_type': 'application/json'
+            }
+        )
         
         # Parse the JSON response
         classifications = json.loads(response.text)
