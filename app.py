@@ -8,7 +8,7 @@ import streamlit as st
 from googleapiclient.discovery import build
 from io import StringIO
 from datetime import datetime, timezone
-import google.generativeai as genai
+from google import genai
 import re
 import json
 
