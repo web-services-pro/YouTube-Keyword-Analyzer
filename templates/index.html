@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YTA-AEO Dominance Suite</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans antialiased selection:bg-green-500 selection:text-gray-950">
+
+    <header class="border-b border-gray-900 bg-gray-900/40 backdrop-blur px-6 py-4 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 class="text-sm font-black tracking-widest text-green-400 uppercase">YTA-AEO // RADAR SUITE</h1>
+            <div class="flex items-center gap-3">
+                <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+                <span class="text-[10px] text-gray-500 font-mono tracking-wider">CORE MODULES LIVE</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            
+            <div class="bg-gray-900 border border-gray-850 p-6 rounded-xl shadow-xl space-y-4">
+                <div>
+                    <h2 class="text-base font-bold text-white tracking-wide">Ecosystem Deep Scan</h2>
+                    <p class="text-xs text-gray-400">Processes view metrics and generates production assets via Gemini.</p>
+                </div>
+                <form action="/analyze" method="POST" class="space-y-3">
+                    <input type="text" name="keyword" required placeholder="Enter target search term (e.g., how to reset password on shopify)..." 
+                           class="w-full bg-gray-950 border border-gray-800 px-4 py-3 rounded-lg focus:outline-none focus:border-green-400 text-sm text-gray-200 placeholder:text-gray-600">
+                    <button type="submit" class="w-full bg-green-500 hover:bg-green-400 text-gray-950 text-xs font-black uppercase tracking-wider py-3 rounded-lg transition duration-150 cursor-pointer">
+                        Run Deep Scan Execution
+                    </button>
+                </form>
+            </div>
+
+            <div class="bg-gray-900 border border-gray-850 p-6 rounded-xl shadow-xl space-y-4">
+                <div>
+                    <h2 class="text-base font-bold text-white tracking-wide">Automated Gap Discovery</h2>
+                    <p class="text-xs text-gray-400">Harvests long-tail query modifications and scans vulnerability footprints.</p>
+                </div>
+                <form action="/discover" method="POST" class="space-y-3">
+                    <input type="text" name="seed" required placeholder="Enter broad topic seed keyword (e.g., shopify, tiktok shop)..." 
+                           class="w-full bg-gray-950 border border-gray-800 px-4 py-3 rounded-lg focus:outline-none focus:border-green-400 text-sm text-gray-200 placeholder:text-gray-600">
+                    <button type="submit" class="w-full bg-gray-800 hover:bg-gray-700 text-green-400 text-xs font-black uppercase tracking-wider py-3 rounded-lg transition duration-150 cursor-pointer">
+                        Execute Discovery Matrix
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <hr class="border-gray-900">
+
+        {% if results %}
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-1 space-y-6">
+                <div class="bg-gray-900 border border-gray-850 rounded-xl p-5 space-y-4">
+                    <h3 class="text-xs font-bold tracking-wider uppercase text-gray-400 border-b border-gray-800 pb-2">Target Footprint Metrics</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <p class="text-[10px] text-gray-500 uppercase tracking-wider">Search Term Volume</p>
+                            <p class="text-xl font-bold text-white">{{ volume }} <span class="text-xs text-gray-500 font-normal">/ year</span></p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-gray-500 uppercase tracking-wider">Market Vulnerability Index</p>
+                            <p class="text-3xl font-black text-green-400">{{ mvi_score }}<span class="text-sm font-normal text-gray-500">/100</span></p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-gray-500 uppercase tracking-wider">Strategic Deployment Decision</p>
+                            <p class="text-xs font-black uppercase tracking-wide mt-0.5 {{ status_color }}">{{ status }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-900 border border-gray-850 rounded-xl p-5 space-y-3">
+                    <h3 class="text-xs font-bold tracking-wider uppercase text-gray-400 border-b border-gray-800 pb-2">Competitor Node Array</h3>
+                    <div class="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+                        {% for comp in competitors %}
+                        <div class="bg-gray-950 border border-gray-850 p-3 rounded-lg text-xs space-y-1">
+                            <p class="font-bold text-gray-300 truncate">{{ comp.title }}</p>
+                            <p class="text-gray-500 text-[11px]">{{ comp.channel }}</p>
+                            <div class="flex justify-between text-[10px] text-gray-600 pt-1 border-t border-gray-900 mt-1">
+                                <span>Views: {{ comp.views }}</span>
+                                <span>Age: {{ comp.age_days }}d</span>
+                                <span>Len: {{ comp.duration }}m</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="lg:col-span-2">
+                <div class="bg-gray-900 border border-gray-850 rounded-xl p-6 h-full flex flex-col">
+                    <h3 class="text-xs font-bold tracking-wider uppercase text-gray-400 mb-3 pb-2 border-b border-gray-800">Gemini Native AEO Execution Blueprint</h3>
+                    <div class="bg-gray-950 border border-gray-850 p-4 rounded-lg overflow-y-auto max-h-[620px] text-xs text-gray-300 leading-relaxed font-mono space-y-3 flex-1">
+                        {{ ai_assets | safe }}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if discovery %}
+        <div class="bg-gray-900 border border-gray-850 rounded-xl p-6 space-y-4">
+            <h3 class="text-xs font-bold tracking-wider uppercase text-gray-400 pb-2 border-b border-gray-800">Discovered Long-Tail Content Gaps for: "{{ seed }}"</h3>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse text-xs">
+                    <thead>
+                        <tr class="border-b border-gray-800 text-gray-500 font-mono">
+                            <th class="pb-3 font-medium">Discovered Long-Tail Core Query</th>
+                            <th class="pb-3 font-medium">Market Vulnerability (MVI)</th>
+                            <th class="pb-3 font-medium">Approx. Volume</th>
+                            <th class="pb-3 font-medium text-right">Assessment Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-850">
+                        {% for gap in gaps %}
+                        <tr class="hover:bg-gray-900/50 transition">
+                            <td class="py-4 font-medium text-gray-200 font-mono">{{ gap.phrase }}</td>
+                            <td class="py-4 font-bold text-green-400 font-mono">{{ gap.mvi }}/100</td>
+                            <td class="py-4 text-gray-400">{{ gap.volume }}</td>
+                            <td class="py-4 text-right">
+                                <span class="px-2.5 py-1 text-[10px] font-black tracking-wider uppercase rounded-md border {{ gap.badge_color }}">
+                                    {{ gap.assessment }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+    </main>
+</body>
+</html>
